@@ -16,7 +16,16 @@ export class InitialSchema1739000000000 implements MigrationInterface {
       CREATE TYPE "delivery_orders_status_enum" AS ENUM ('pending', 'settled', 'partial')
     `);
     await queryRunner.query(`
+      CREATE TYPE "purchase_orders_status_enum" AS ENUM ('pending', 'settled', 'partial')
+    `);
+    await queryRunner.query(`
       CREATE TYPE "statements_period_enum" AS ENUM ('weekly', 'biweekly', 'monthly')
+    `);
+    await queryRunner.query(`
+      CREATE TYPE "customers_type_enum" AS ENUM ('Client', 'Supplier')
+    `);
+    await queryRunner.query(`
+      CREATE TYPE "payment_records_method_enum" AS ENUM ('Public_Cash', 'Public_Acceptance', 'Private_Alipay', 'Private_Wechat', 'Private_Card')
     `);
 
     await queryRunner.query(`
@@ -36,6 +45,7 @@ export class InitialSchema1739000000000 implements MigrationInterface {
       CREATE TABLE "users" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "username" character varying NOT NULL,
+        "code" character varying,
         "password" character varying NOT NULL,
         "name" character varying NOT NULL,
         "role" "users_role_enum" NOT NULL DEFAULT 'piece_rate',
@@ -44,7 +54,8 @@ export class InitialSchema1739000000000 implements MigrationInterface {
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_users" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_users_username" UNIQUE ("username")
+        CONSTRAINT "UQ_users_username" UNIQUE ("username"),
+        CONSTRAINT "UQ_users_code" UNIQUE ("code")
       )
     `);
 
@@ -56,6 +67,8 @@ export class InitialSchema1739000000000 implements MigrationInterface {
         "address" character varying,
         "contactPerson" character varying,
         "phone" character varying,
+        "group" character varying,
+        "type" "customers_type_enum" NOT NULL DEFAULT 'Client',
         "isActive" boolean NOT NULL DEFAULT true,
         "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
@@ -92,6 +105,21 @@ export class InitialSchema1739000000000 implements MigrationInterface {
         CONSTRAINT "UQ_product_prices_product_customer" UNIQUE ("productId", "customerId"),
         CONSTRAINT "FK_product_prices_product" FOREIGN KEY ("productId") REFERENCES "products"("id"),
         CONSTRAINT "FK_product_prices_customer" FOREIGN KEY ("customerId") REFERENCES "customers"("id")
+      )
+    `);
+
+    await queryRunner.query(`
+      CREATE TABLE "payment_records" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "customerId" uuid NOT NULL,
+        "amount" numeric(12,2) NOT NULL,
+        "paymentDate" date NOT NULL,
+        "method" "payment_records_method_enum" NOT NULL,
+        "remarks" text,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_payment_records" PRIMARY KEY ("id"),
+        CONSTRAINT "FK_payment_records_customer" FOREIGN KEY ("customerId") REFERENCES "customers"("id")
       )
     `);
 
@@ -152,6 +180,23 @@ export class InitialSchema1739000000000 implements MigrationInterface {
     `);
 
     await queryRunner.query(`
+      CREATE TABLE "purchase_orders" (
+        "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "purchaseDate" date NOT NULL,
+        "item" character varying NOT NULL,
+        "supplier" character varying NOT NULL,
+        "quantity" integer NOT NULL,
+        "amount" numeric(10,2) NOT NULL,
+        "paidAmount" numeric(10,2) NOT NULL DEFAULT 0,
+        "status" "purchase_orders_status_enum" NOT NULL DEFAULT 'pending',
+        "remark" text,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_purchase_orders" PRIMARY KEY ("id")
+      )
+    `);
+
+    await queryRunner.query(`
       CREATE TABLE "statements" (
         "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
         "customerId" uuid NOT NULL,
@@ -170,15 +215,20 @@ export class InitialSchema1739000000000 implements MigrationInterface {
 
   async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP TABLE "statements"`);
+    await queryRunner.query(`DROP TABLE "purchase_orders"`);
     await queryRunner.query(`DROP TABLE "delivery_order_items"`);
     await queryRunner.query(`DROP TABLE "delivery_orders"`);
     await queryRunner.query(`DROP TABLE "inventory_records"`);
     await queryRunner.query(`DROP TABLE "product_prices"`);
     await queryRunner.query(`DROP TABLE "products"`);
+    await queryRunner.query(`DROP TABLE "payment_records"`);
     await queryRunner.query(`DROP TABLE "customers"`);
     await queryRunner.query(`DROP TABLE "users"`);
     await queryRunner.query(`DROP TABLE "companies"`);
+    await queryRunner.query(`DROP TYPE "payment_records_method_enum"`);
+    await queryRunner.query(`DROP TYPE "customers_type_enum"`);
     await queryRunner.query(`DROP TYPE "statements_period_enum"`);
+    await queryRunner.query(`DROP TYPE "purchase_orders_status_enum"`);
     await queryRunner.query(`DROP TYPE "delivery_orders_status_enum"`);
     await queryRunner.query(`DROP TYPE "inventory_records_status_enum"`);
     await queryRunner.query(`DROP TYPE "users_role_enum"`);
