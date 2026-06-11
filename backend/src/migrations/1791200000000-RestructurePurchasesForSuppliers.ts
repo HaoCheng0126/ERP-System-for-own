@@ -12,7 +12,7 @@ export class RestructurePurchasesForSuppliers1791200000000 implements MigrationI
 
     await queryRunner.query(`
       WITH "unique_suppliers" AS (
-        SELECT "name", MIN("id") AS "supplierId"
+        SELECT "name", MIN("id"::text)::uuid AS "supplierId"
         FROM "customers"
         WHERE "type" = 'Supplier'
         GROUP BY "name"
