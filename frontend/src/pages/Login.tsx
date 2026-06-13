@@ -154,10 +154,10 @@ const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">Kinko</h1>
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4 py-8">
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl sm:p-8">
+        <div className="mb-8 text-center">
+          <h1 className="mb-2 text-3xl font-bold text-gray-800">Kinko</h1>
           <p className="text-gray-500">企业管理系统</p>
         </div>
 
@@ -175,7 +175,7 @@ const Login: React.FC = () => {
                 type="text"
                 value={account}
                 onChange={(e) => setAccount(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className="min-h-11 w-full rounded-lg border border-gray-300 py-3 pl-10 pr-4 outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
                 placeholder="请输入账号/员工编号/手机号"
                 required
               />
@@ -190,7 +190,7 @@ const Login: React.FC = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className="min-h-11 w-full rounded-lg border border-gray-300 py-3 pl-10 pr-4 outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
                 placeholder="请输入密码"
                 required
               />
@@ -200,7 +200,7 @@ const Login: React.FC = () => {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed"
+            className="min-h-11 w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-400"
           >
             {isLoading ? '登录中...' : '登录'}
           </button>
@@ -217,7 +217,7 @@ const Login: React.FC = () => {
                 type="button"
                 onClick={beginFeishuLogin}
                 disabled={isFeishuLoading}
-                className="w-full border border-slate-300 text-slate-700 py-3 rounded-lg font-medium hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-slate-300 py-3 font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Building2 className="w-5 h-5" />
                 {isFeishuLoading ? '飞书登录中...' : '使用飞书登录'}

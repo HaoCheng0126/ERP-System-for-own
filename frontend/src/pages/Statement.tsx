@@ -6,6 +6,7 @@ import ActionableEmptyState from '../components/ActionableEmptyState';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
 import Layout from '../components/Layout';
+import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import { Company, Customer, CustomerType, DeliveryOrder, PaymentMethod, PaymentRecord, PurchaseOrder } from '../types';
 import { groupDeliveryOrders } from '../utils/deliveryGrouping';
@@ -542,7 +543,7 @@ const Statement: React.FC = () => {
 
                   {isExpanded && (
                     <div className="border-t border-gray-200 px-4 py-3">
-                      <div className="overflow-x-auto">
+                      <div className="hidden overflow-x-auto md:block">
                         <table className="min-w-full divide-y divide-gray-200">
                           <thead className="bg-gray-50">
                             <tr>
@@ -571,6 +572,26 @@ const Statement: React.FC = () => {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                      <div className="space-y-3 md:hidden">
+                        {dateGroup.purchases.map((purchase) => (
+                          <MobileRecordCard key={purchase.id} className="shadow-none">
+                            <div className="mb-3 flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-gray-900">{purchase.item}</div>
+                                <div className="mt-1 text-xs text-gray-500">{purchase.remark || '无备注'}</div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <div className="text-xs text-gray-500">金额</div>
+                                <div className="text-base font-bold text-gray-900">¥{formatAmount(getPurchaseAmount(purchase))}</div>
+                              </div>
+                            </div>
+                            <MobileFieldGrid>
+                              <MobileField label="数量" value={`${formatDisplayDecimal(purchase.quantity, 4)} ${purchase.unit || ''}`} />
+                              <MobileField label="单价" value={formatUnitPrice(purchase.unitPrice)} align="right" />
+                            </MobileFieldGrid>
+                          </MobileRecordCard>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -631,7 +652,7 @@ const Statement: React.FC = () => {
 
                   {isExpanded && (
                     <div className="border-t border-gray-200 px-4 py-3">
-                      <div className="overflow-x-auto">
+                      <div className="hidden overflow-x-auto md:block">
                         <table className="min-w-full divide-y divide-gray-200">
                           <thead className="bg-gray-50">
                             <tr>
@@ -660,6 +681,26 @@ const Statement: React.FC = () => {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                      <div className="space-y-3 md:hidden">
+                        {orderGroup.items.map((item) => (
+                          <MobileRecordCard key={item.id} className="shadow-none">
+                            <div className="mb-3 flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-gray-900">{item.product?.name || '-'}</div>
+                                <div className="mt-1 text-xs text-gray-500">{item.product?.specification || '-'}</div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <div className="text-xs text-gray-500">金额</div>
+                                <div className="text-base font-bold text-gray-900">¥{formatAmount(item.amount)}</div>
+                              </div>
+                            </div>
+                            <MobileFieldGrid>
+                              <MobileField label="数量" value={`${formatDisplayDecimal(item.quantity, 4)} ${item.product?.unit || ''}`} />
+                              <MobileField label="单价" value={formatUnitPrice(item.unitPrice)} align="right" />
+                            </MobileFieldGrid>
+                          </MobileRecordCard>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -760,9 +801,9 @@ const Statement: React.FC = () => {
 
       <PageHeader title="对账单管理" subtitle="管理客户与供应商对账、付款和打印" />
 
-      <div className="statement-page space-y-6 p-8">
+      <div className="statement-page space-y-6 p-4 md:p-8">
         <div className="statement-screen-filters rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-end gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">类型筛选</label>
               <select
@@ -771,7 +812,7 @@ const Statement: React.FC = () => {
                   setSelectedType(event.target.value as StatementTypeFilter);
                   setReconCompanyId('');
                 }}
-                className="block w-40 rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm lg:w-40"
               >
                 <option value="all">全部</option>
                 <option value={CustomerType.CLIENT}>客户</option>
@@ -797,22 +838,22 @@ const Statement: React.FC = () => {
               />
             </div>
 
-            <div className="flex gap-2 pb-0.5">
+            <div className="grid grid-cols-3 gap-2 pb-0.5 sm:col-span-2 lg:col-span-1">
               <button
                 onClick={() => handleDateShortcut('month')}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 本月
               </button>
               <button
                 onClick={() => handleDateShortcut('year')}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 今年
               </button>
               <button
                 onClick={() => handleDateShortcut('all')}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 全部
               </button>
@@ -823,7 +864,7 @@ const Statement: React.FC = () => {
               <select
                 value={reconCompanyId}
                 onChange={(event) => setReconCompanyId(event.target.value)}
-                className="block w-48 rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm lg:w-48"
               >
                 <option value="">所有往来方</option>
                 {availableCustomers.map((customer) => (
@@ -869,36 +910,36 @@ const Statement: React.FC = () => {
                 return (
                   <div key={companyId} className="bg-white">
                     <div
-                      className="flex cursor-pointer items-center justify-between px-6 py-4 hover:bg-gray-50"
+                      className="flex cursor-pointer flex-col gap-4 px-4 py-4 hover:bg-gray-50 md:flex-row md:items-center md:justify-between md:px-6"
                       onClick={() => toggleCompanyExpand(companyId)}
                     >
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-start gap-3 md:items-center md:gap-4">
                         <div className="text-gray-400">
                           {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
                         </div>
-                        <div>
+                        <div className="min-w-0">
                           <h3 className="flex items-center gap-2 text-lg font-medium text-gray-900">
                             {group.customer?.name}
                             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-500">
                               {group.customer?.type === CustomerType.CLIENT ? '客户' : '供应商'}
                             </span>
                           </h3>
-                          <p className="text-sm text-gray-500">
+                          <p className="mt-1 text-sm text-gray-500">
                             {labels.periodBusiness}: ¥{formatAmount(group.periodBusiness)} | 本期付款: ¥{formatAmount(group.periodPayment)}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-8">
-                        <div className="text-right">
+                      <div className="grid w-full grid-cols-1 gap-3 md:w-auto md:grid-cols-none md:flex md:items-center md:gap-8">
+                        <div className="rounded-lg bg-gray-50 p-3 md:bg-transparent md:p-0 md:text-right">
                           <p className="text-sm text-gray-500">{labels.totalBusiness}</p>
                           <p className="text-lg font-bold text-gray-900">¥{formatAmount(group.totalBusiness)}</p>
                         </div>
-                        <div className="text-right">
+                        <div className="rounded-lg bg-gray-50 p-3 md:bg-transparent md:p-0 md:text-right">
                           <p className="text-sm text-gray-500">累计已付</p>
                           <p className="text-lg font-bold text-green-600">¥{formatAmount(group.totalPayment)}</p>
                         </div>
-                        <div className="text-right">
+                        <div className="rounded-lg bg-gray-50 p-3 md:bg-transparent md:p-0 md:text-right">
                           <p className="text-sm text-gray-500">{labels.balance}</p>
                           <p className={`text-lg font-bold ${group.endingBalance >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
                             ¥{formatAmount(group.endingBalance)}
@@ -907,7 +948,7 @@ const Statement: React.FC = () => {
 
                         <button
                           onClick={(event) => handleOpenStatementExport(companyId, event)}
-                          className="flex items-center gap-1 rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-800"
+                          className="flex min-h-11 items-center justify-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
                         >
                           <Download className="h-4 w-4" />
                           导出对账单
@@ -920,7 +961,7 @@ const Statement: React.FC = () => {
                             setPaymentSubmitError('');
                             setShowPaymentModal(true);
                           }}
-                          className="flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                          className="flex min-h-11 items-center justify-center gap-1 rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
                         >
                           <Plus className="h-4 w-4" />
                           登记付款
@@ -929,13 +970,13 @@ const Statement: React.FC = () => {
                     </div>
 
                     {isExpanded && (
-                      <div className="grid grid-cols-1 gap-6 border-t border-gray-100 bg-gray-50 px-6 py-4 lg:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-6 border-t border-gray-100 bg-gray-50 px-4 py-4 md:px-6 lg:grid-cols-2">
                         {renderBusinessDetails(group)}
 
                         <div>
                           <h4 className="mb-3 text-sm font-medium text-gray-700">本期付款记录 ({group.payments.length})</h4>
                           <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                            <table className="min-w-full divide-y divide-gray-200">
+                            <table className="hidden min-w-full divide-y divide-gray-200 md:table">
                               <thead className="bg-gray-50">
                                 <tr>
                                   <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">日期</th>
@@ -970,6 +1011,36 @@ const Statement: React.FC = () => {
                                 )}
                               </tbody>
                             </table>
+                            <div className="space-y-3 p-3 md:hidden">
+                              {group.payments.map((payment) => (
+                                <MobileRecordCard key={payment.id} className="shadow-none">
+                                  <div className="mb-3 flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-semibold text-gray-900">{payment.paymentDate}</div>
+                                      <div className="mt-1 text-xs text-gray-500">{paymentMethodLabels[payment.method]}</div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-xs text-gray-500">金额</div>
+                                      <div className="text-base font-bold text-green-600">¥{formatAmount(payment.amount)}</div>
+                                    </div>
+                                  </div>
+                                  <MobileField label="备注" value={payment.remarks || '-'} />
+                                  <MobileActionBar>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePayment(payment.id)}
+                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      删除
+                                    </button>
+                                  </MobileActionBar>
+                                </MobileRecordCard>
+                              ))}
+                              {group.payments.length === 0 && (
+                                <div className="px-3 py-4 text-center text-sm text-gray-500">无付款记录</div>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1210,8 +1281,8 @@ const Statement: React.FC = () => {
       </div>
 
       {showPaymentModal && (
-        <div className="statement-payment-modal fixed inset-0 h-full w-full overflow-y-auto bg-gray-600 bg-opacity-50">
-          <div className="relative top-20 mx-auto w-96 rounded-md border bg-white p-5 shadow-lg">
+        <div className="statement-payment-modal fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:w-96 sm:rounded-lg">
             <h3 className="mb-4 text-lg font-medium text-gray-900">登记付款</h3>
             <div className="space-y-4">
               {paymentSubmitError && (
@@ -1283,19 +1354,19 @@ const Statement: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => {
                   setPaymentSubmitError('');
                   setShowPaymentModal(false);
                 }}
-                className="mr-3 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
               >
                 取消
               </button>
               <button
                 onClick={handleAddPayment}
-                className="rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
               >
                 确认登记
               </button>

@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Download, Edit, Trash2, X } from 'lucide-rea
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
 import Layout from '../components/Layout';
+import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import QueryStateBanner from '../components/QueryStateBanner';
 import { Customer, CustomerType, PurchaseOrder } from '../types';
@@ -357,7 +358,7 @@ const Purchase: React.FC = () => {
         action={{ label: '新增进货记录', onClick: openCreateModal }}
       />
 
-      <div className="purchase-page p-8">
+      <div className="purchase-page p-4 md:p-8">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -367,13 +368,13 @@ const Purchase: React.FC = () => {
         />
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="purchase-screen-controls border-b border-gray-200 bg-gray-50 p-4">
-            <div className="flex flex-wrap items-end gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
               <div>
                 <label className="mb-1 block text-xs font-medium text-gray-600">开始日期</label>
                 <DateField
                   value={filterDateRange.startDate}
                   onChange={(value) => setFilterDateRange({ ...filterDateRange, startDate: value })}
-                  className="w-40"
+                  className="w-full lg:w-40"
                 />
               </div>
 
@@ -382,26 +383,26 @@ const Purchase: React.FC = () => {
                 <DateField
                   value={filterDateRange.endDate}
                   onChange={(value) => setFilterDateRange({ ...filterDateRange, endDate: value })}
-                  className="w-40"
+                  className="w-full lg:w-40"
                 />
               </div>
 
-              <div className="flex gap-2 pb-0.5">
+              <div className="grid grid-cols-3 gap-2 pb-0.5 sm:col-span-2 lg:col-span-1">
                 <button
                   onClick={() => handleDateShortcut('month')}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
                 >
                   本月
                 </button>
                 <button
                   onClick={() => handleDateShortcut('year')}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
                 >
                   今年
                 </button>
                 <button
                   onClick={() => handleDateShortcut('all')}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
                 >
                   全部
                 </button>
@@ -412,7 +413,7 @@ const Purchase: React.FC = () => {
                 <select
                   value={filterSupplierId}
                   onChange={(event) => setFilterSupplierId(event.target.value)}
-                  className="block w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
                 >
                   <option value="">所有供应商</option>
                   {customers?.map((supplier) => (
@@ -430,11 +431,11 @@ const Purchase: React.FC = () => {
                   value={filterItem}
                   onChange={(event) => setFilterItem(event.target.value)}
                   placeholder="输入品名搜索"
-                  className="block w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
                 />
               </div>
 
-              <div className="ml-auto flex gap-2 pb-0.5">
+              <div className="flex gap-2 pb-0.5 sm:col-span-2 lg:col-span-1 lg:ml-auto">
                 {(filterSupplierId || filterDateRange.startDate || filterDateRange.endDate || filterItem) && (
                   <button
                     onClick={() => {
@@ -442,7 +443,7 @@ const Purchase: React.FC = () => {
                       setFilterDateRange({ startDate: '', endDate: '' });
                       setFilterItem('');
                     }}
-                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-amber-700 transition-colors hover:bg-amber-50"
+                    className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-amber-700 transition-colors hover:bg-amber-50 lg:w-auto"
                   >
                     清除筛选
                   </button>
@@ -452,7 +453,7 @@ const Purchase: React.FC = () => {
             </div>
           </div>
 
-          <div className="purchase-screen-layout p-6">
+          <div className="purchase-screen-layout p-4 md:p-6">
             {groupedPurchases.length === 0 ? (
               <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-6 py-20 text-center">
                 <p className="text-base font-medium text-gray-700">暂无符合条件的采购记录</p>
@@ -468,7 +469,7 @@ const Purchase: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => toggleSupplierExpand(supplierGroup.supplierKey)}
-                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-gray-50"
+                        className="flex w-full flex-col gap-4 px-4 py-4 text-left transition-colors hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between sm:px-5"
                       >
                         <div className="flex min-w-0 items-center gap-3">
                           <div className="text-gray-400">
@@ -482,19 +483,19 @@ const Purchase: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 flex-wrap items-center gap-6 text-right">
-                          <div>
+                        <div className="grid w-full grid-cols-2 gap-3 text-left sm:w-auto sm:flex sm:shrink-0 sm:flex-wrap sm:items-center sm:gap-6 sm:text-right">
+                          <div className="rounded-lg bg-gray-50 p-3 sm:bg-transparent sm:p-0">
                             <p className="text-xs uppercase tracking-[0.18em] text-gray-400">采购条数</p>
                             <p className="mt-1 text-lg font-semibold text-gray-900">{supplierGroup.purchaseCount}</p>
                           </div>
-                          <div>
+                          <div className="rounded-lg bg-gray-50 p-3 text-right sm:bg-transparent sm:p-0">
                             <p className="text-xs uppercase tracking-[0.18em] text-gray-400">总金额</p>
                             <p className="mt-1 text-lg font-semibold text-gray-900">¥{formatAmount(supplierGroup.totalAmount)}</p>
                           </div>
                           <button
                             type="button"
                             onClick={(event) => handleOpenSupplierExport(supplierGroup.supplierKey, event)}
-                            className="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50"
+                            className="col-span-2 inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 sm:col-span-1"
                             title="导出 PDF"
                           >
                             <Download className="mr-1 h-4 w-4" />
@@ -506,7 +507,7 @@ const Purchase: React.FC = () => {
                       {isSupplierExpanded && (
                         <div className="border-t border-gray-200 bg-gray-50/70 p-4">
                           <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-                            <div className="overflow-x-auto">
+                            <div className="hidden overflow-x-auto md:block">
                               <table className="min-w-full divide-y divide-gray-200">
                                 <thead className="bg-gray-50">
                                   <tr>
@@ -560,6 +561,45 @@ const Purchase: React.FC = () => {
                                   ))}
                                 </tbody>
                               </table>
+                            </div>
+                            <div className="space-y-3 p-3 md:hidden">
+                              {supplierGroup.purchases.map((purchase) => (
+                                <MobileRecordCard key={purchase.id} className="shadow-none">
+                                  <div className="mb-3 flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-semibold text-gray-900">{purchase.item}</div>
+                                      <div className="mt-1 text-xs text-gray-500">{purchase.purchaseDate}</div>
+                                    </div>
+                                    <div className="shrink-0 text-right">
+                                      <div className="text-xs text-gray-500">金额</div>
+                                      <div className="text-base font-bold text-gray-900">¥{formatAmount(getPurchaseAmount(purchase))}</div>
+                                    </div>
+                                  </div>
+                                  <MobileFieldGrid>
+                                    <MobileField label="数量" value={`${formatDisplayDecimal(purchase.quantity, 4)} ${purchase.unit || ''}`} />
+                                    <MobileField label="单价" value={formatUnitPrice(purchase.unitPrice)} align="right" />
+                                    <MobileField label="备注" value={purchase.remark || '-'} />
+                                  </MobileFieldGrid>
+                                  <MobileActionBar>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditPurchase(purchase)}
+                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-100 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+                                    >
+                                      <Edit className="h-4 w-4" />
+                                      编辑
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePurchase(purchase)}
+                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      删除
+                                    </button>
+                                  </MobileActionBar>
+                                </MobileRecordCard>
+                              ))}
                             </div>
                           </div>
                         </div>
@@ -647,8 +687,8 @@ const Purchase: React.FC = () => {
       </div>
 
       {showModal && (
-        <div className="purchase-modal-root fixed inset-0 h-full w-full overflow-y-auto bg-gray-600 bg-opacity-50">
-          <div className="relative top-20 mx-auto w-full max-w-2xl rounded-md border bg-white p-5 shadow-lg">
+        <div className="purchase-modal-root fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:max-w-2xl sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-medium text-gray-900">{isEditing ? '编辑采购记录' : '新增采购记录'}</h3>
               <button onClick={resetForm} className="text-gray-400 transition-colors hover:text-gray-600">
@@ -746,16 +786,16 @@ const Purchase: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end gap-3">
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={resetForm}
-                className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
               >
                 取消
               </button>
               <button
                 onClick={handleCreateOrUpdate}
-                className="rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
               >
                 {isEditing ? '保存采购记录' : '创建采购记录'}
               </button>

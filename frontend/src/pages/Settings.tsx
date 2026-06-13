@@ -84,7 +84,7 @@ const Settings: React.FC = () => {
         subtitle="管理系统和公司信息" 
       />
       
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -93,7 +93,7 @@ const Settings: React.FC = () => {
           onRetry={() => refetch()}
         />
         <div className="mb-6 border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8">
+          <nav className="-mb-px flex gap-6 overflow-x-auto">
             <button
               onClick={() => handleTabChange('company')}
               className={`${
@@ -120,14 +120,14 @@ const Settings: React.FC = () => {
         {activeTab === 'users' ? (
           <UserManagement />
         ) : (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="p-6">
-            <div className="flex justify-between items-center mb-6">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-lg font-medium text-gray-900">公司信息</h3>
               {!isEditing && (
                 <button
                   onClick={handleEdit}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto"
                 >
                   编辑
                 </button>
@@ -223,16 +223,16 @@ const Settings: React.FC = () => {
             </div>
 
             {isEditing && (
-              <div className="flex justify-end mt-6">
+              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                 <button
                   onClick={handleCancel}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 mr-3"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
                 >
                   取消
                 </button>
                 <button
                   onClick={handleSave}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
                 >
                   <Save className="w-4 h-4 mr-2" />
                   保存

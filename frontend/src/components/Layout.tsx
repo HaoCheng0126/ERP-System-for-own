@@ -61,7 +61,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const profilePath = '/employee-system';
 
   return (
-    <div className="flex h-screen bg-[#F5F6F7] relative">
+    <div className="relative flex h-screen overflow-hidden bg-[#F5F6F7]">
       {/* Mobile Header */}
       <div className="md:hidden fixed top-0 left-0 right-0 h-14 bg-white border-b border-[#DEE0E3] z-20 flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
@@ -76,7 +76,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Sidebar */}
       <aside 
         className={`
-          fixed md:static inset-y-0 left-0 z-30 w-64 bg-[#F2F3F5] flex flex-col border-r border-[#DEE0E3] transition-transform duration-300 ease-in-out
+          fixed md:static inset-y-0 left-0 z-30 w-[82vw] max-w-72 md:w-64 bg-[#F2F3F5] flex flex-col border-r border-[#DEE0E3] transition-transform duration-300 ease-in-out
           ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
       >
@@ -148,7 +148,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       )}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto bg-white m-2 rounded-lg shadow-sm border border-[#DEE0E3] mt-16 md:mt-2">
+      <main className="mt-14 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-white md:m-2 md:mt-2 md:rounded-lg md:border md:border-[#DEE0E3] md:shadow-sm">
         {children}
       </main>
     </div>

@@ -4,6 +4,7 @@ import { X, FileText, Edit, Plus, CheckSquare, Square, Download, Trash2 } from '
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
 import Layout from '../components/Layout';
+import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import ProductAutocomplete from '../components/ProductAutocomplete';
 import ActionableEmptyState from '../components/ActionableEmptyState';
@@ -522,7 +523,7 @@ const Inventory: React.FC = () => {
         }
       `}</style>
       
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -530,15 +531,15 @@ const Inventory: React.FC = () => {
           errorText="入库记录暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
           {/* 筛选区域 */}
-          <div className="p-4 border-b border-gray-200 bg-gray-50 flex flex-wrap gap-4 items-end">
+          <div className="grid grid-cols-1 gap-3 border-b border-gray-200 bg-gray-50 p-4 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-gray-500">日期</label>
               <DateField
                 value={filterDate}
                 onChange={setFilterDate}
-                className="w-40"
+                className="w-full lg:w-40"
               />
             </div>
 
@@ -547,7 +548,7 @@ const Inventory: React.FC = () => {
               <select
                 value={filterProduct}
                 onChange={(e) => setFilterProduct(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 w-40"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
               >
                 <option value="">所有产品</option>
                 {Array.from(new Set((products || []).map((p: Product) => p.name))).map((name) => (
@@ -563,7 +564,7 @@ const Inventory: React.FC = () => {
               <select
                 value={filterSpec}
                 onChange={(e) => setFilterSpec(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 w-40"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
               >
                 <option value="">所有规格</option>
                 {products
@@ -582,7 +583,7 @@ const Inventory: React.FC = () => {
                 <select
                   value={filterSubmitter}
                   onChange={(e) => setFilterSubmitter(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 w-40"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
                 >
                   <option value="">所有提交人</option>
                   {Array.from(new Set((inventoryRecords || []).map((r: InventoryRecord) => r.submitter?.name).filter((n: string | undefined): n is string => !!n))).map((name) => (
@@ -599,7 +600,7 @@ const Inventory: React.FC = () => {
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 w-40"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
               >
                 <option value="all">所有状态</option>
                 <option value={InventoryRecordStatus.PENDING}>待审核</option>
@@ -608,7 +609,7 @@ const Inventory: React.FC = () => {
               </select>
             </div>
 
-            <div className="flex gap-2 ml-auto pb-0.5">
+            <div className="flex flex-col gap-2 pb-0.5 sm:col-span-2 sm:flex-row lg:col-span-1 lg:ml-auto">
               {(filterProduct || filterSpec || filterSubmitter || filterDate || filterStatus !== 'all') && (
                 <button
                   onClick={() => {
@@ -618,7 +619,7 @@ const Inventory: React.FC = () => {
                     setFilterDate('');
                     setFilterStatus('all');
                   }}
-                  className="px-3 py-2 text-sm text-blue-600 hover:text-blue-800 bg-white border border-gray-300 rounded-md"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-blue-600 hover:text-blue-800"
                 >
                   清除筛选
                 </button>
@@ -627,7 +628,7 @@ const Inventory: React.FC = () => {
               <button
                 onClick={handleExport}
                 disabled={filteredRecords.length === 0}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Download className="w-4 h-4 mr-2" />
                 导出
@@ -637,23 +638,23 @@ const Inventory: React.FC = () => {
 
           {/* 批量操作栏 */}
           {selectedRecordIds.size > 0 && getUserRole() !== UserRole.PIECE_RATE && (
-            <div className="bg-blue-50 border-b border-blue-200 p-4 flex items-center justify-between">
+            <div className="flex flex-col gap-3 border-b border-blue-200 bg-blue-50 p-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <span className="text-blue-700 font-medium">已选择 {selectedRecordIds.size} 条待审核记录</span>
-                <span className="ml-3 text-xs text-blue-600">已通过和已拒绝记录不可重复审核</span>
+                <span className="block text-xs text-blue-600 md:ml-3 md:inline">已通过和已拒绝记录不可重复审核</span>
               </div>
-              <div className="space-x-3">
+              <div className="grid grid-cols-2 gap-2 md:flex md:gap-3">
                 <button
                   onClick={() => handleBatchReview(InventoryRecordStatus.APPROVED)}
                   disabled={isBatchProcessing}
-                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm font-medium disabled:opacity-50"
+                  className="min-h-11 rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
                 >
                   批量通过
                 </button>
                 <button
                   onClick={() => handleBatchReview(InventoryRecordStatus.REJECTED)}
                   disabled={isBatchProcessing}
-                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm font-medium disabled:opacity-50"
+                  className="min-h-11 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
                 >
                   批量拒绝
                 </button>
@@ -682,7 +683,8 @@ const Inventory: React.FC = () => {
               />
             </div>
           ) : filteredRecords.length > 0 ? (
-          <div className="overflow-x-auto">
+          <>
+          <div className="hidden overflow-x-auto md:block">
             <table className="min-w-[1000px] w-full">
               <thead className="bg-gray-50">
                 <tr>
@@ -815,6 +817,100 @@ const Inventory: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <div className="space-y-3 p-4 md:hidden">
+            {filteredRecords.map((record: InventoryRecord) => (
+              <MobileRecordCard key={record.id}>
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-gray-900">
+                      {record.recordNumber || `#${record.id.slice(0, 8)}`}
+                    </div>
+                    <div className="mt-1 text-sm text-gray-500">
+                      {record.product?.name || '-'} · {record.product?.specification || '-'}
+                    </div>
+                  </div>
+                  {getUserRole() !== UserRole.PIECE_RATE && (
+                    <button
+                      onClick={() => toggleSelection(record)}
+                      disabled={record.status !== InventoryRecordStatus.PENDING}
+                      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 disabled:cursor-not-allowed disabled:text-gray-300"
+                      title={record.status === InventoryRecordStatus.PENDING ? '选择待审核记录' : '该记录已审核，不能重复处理'}
+                    >
+                      {selectedRecordIds.has(record.id) ? (
+                        <CheckSquare className="h-5 w-5 text-blue-600" />
+                      ) : (
+                        <Square className="h-5 w-5" />
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                <MobileFieldGrid>
+                  <MobileField label="数量" value={`${record.quantity} ${record.product?.unit || ''}`} />
+                  <MobileField label="总金额" value={`¥${formatAmount(record.totalAmount)}`} align="right" />
+                  <MobileField label="单价" value={`¥${formatUnitPrice(record.unitPrice)}`} />
+                  <MobileField label="提交人" value={record.submitter?.name || '-'} align="right" />
+                  <MobileField
+                    label="来源"
+                    value={
+                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getSubmissionModeBadgeClass(record.submissionMode)}`}>
+                        {getSubmissionModeText(record.submissionMode)}
+                      </span>
+                    }
+                  />
+                  <MobileField
+                    label="状态"
+                    align="right"
+                    value={
+                      <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusBadgeClass(record.status)}`}>
+                        {getStatusText(record.status)}
+                      </span>
+                    }
+                  />
+                </MobileFieldGrid>
+
+                <MobileActionBar>
+                  {record.status === InventoryRecordStatus.PENDING && (
+                    <button
+                      onClick={() => handleOpenReviewModal(record)}
+                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                    >
+                      <FileText className="h-4 w-4" />
+                      审核
+                    </button>
+                  )}
+                  {record.status === InventoryRecordStatus.REJECTED && userRole !== UserRole.ADMIN && (
+                    <button
+                      onClick={() => handleOpenEditModal(record)}
+                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                    >
+                      <Edit className="h-4 w-4" />
+                      修改
+                    </button>
+                  )}
+                  {userRole === UserRole.ADMIN && record.status === InventoryRecordStatus.APPROVED && (
+                    <>
+                      <button
+                        onClick={() => handleOpenEditModal(record)}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                      >
+                        <Edit className="h-4 w-4" />
+                        编辑
+                      </button>
+                      <button
+                        onClick={() => handleDeleteInventory(record)}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        删除
+                      </button>
+                    </>
+                  )}
+                </MobileActionBar>
+              </MobileRecordCard>
+            ))}
+          </div>
+          </>
           ) : null}
         </div>
       </div>
@@ -893,8 +989,9 @@ const Inventory: React.FC = () => {
 
       {/* 添加入库单模态框 */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="max-h-[92vh] w-full overflow-hidden rounded-t-2xl border bg-white shadow-lg sm:max-w-2xl sm:rounded-lg">
+            <div className="p-5">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">
                 {isAdmin ? '管理员分配入库' : '员工提交入库单'}
@@ -906,7 +1003,7 @@ const Inventory: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+            <div className="space-y-4 max-h-[62vh] overflow-y-auto pr-1 sm:pr-2">
               <div className={`p-3 rounded-lg border ${isAdmin ? 'bg-blue-50 border-blue-100' : 'bg-amber-50 border-amber-100'}`}>
                 <div className="flex items-center justify-between">
                   <div>
@@ -985,33 +1082,34 @@ const Inventory: React.FC = () => {
               
               <button
                 onClick={handleAddRow}
-                className="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-blue-500 hover:text-blue-500 flex items-center justify-center gap-2 transition-colors"
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 py-2 text-gray-500 transition-colors hover:border-blue-500 hover:text-blue-500"
               >
                 <Plus className="w-4 h-4" />
                 添加更多产品
               </button>
             </div>
-            <div className="flex justify-end mt-6">
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => setShowAddModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 mr-3"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
               >
                 取消
               </button>
               <button
                 onClick={handleAddInventory}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
                 {isAdmin ? '保存并立即入库' : '提交入库单'}
               </button>
+            </div>
             </div>
           </div>
         </div>
       )}
 
       {errorModalMessage && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-          <div className="relative top-24 mx-auto p-6 border w-[420px] shadow-lg rounded-md bg-white">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="w-full rounded-t-2xl border bg-white p-6 shadow-lg sm:max-w-[420px] sm:rounded-lg">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">{errorModalTitle}</h3>
               <button
@@ -1025,7 +1123,7 @@ const Inventory: React.FC = () => {
             <div className="flex justify-end mt-6">
               <button
                 onClick={() => setErrorModalMessage('')}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="min-h-11 w-full rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto"
               >
                 知道了
               </button>
@@ -1036,8 +1134,8 @@ const Inventory: React.FC = () => {
 
       {/* 审核入库单模态框 */}
       {showReviewModal && selectedRecord && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:w-96 sm:rounded-lg">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">审核入库单</h3>
               <button
@@ -1106,16 +1204,16 @@ const Inventory: React.FC = () => {
                 ></textarea>
               </div>
             </div>
-            <div className="flex justify-end">
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => setShowReviewModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 mr-3"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
               >
                 取消
               </button>
               <button
                 onClick={handleReviewInventory}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
                 提交审核
               </button>
@@ -1126,8 +1224,8 @@ const Inventory: React.FC = () => {
 
       {/* 修改入库单模态框 */}
       {showEditModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:w-96 sm:rounded-lg">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">
                 {isAdmin ? '修改已入库单' : '修改入库单'}
@@ -1200,16 +1298,16 @@ const Inventory: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="flex justify-end mt-6">
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => setShowEditModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 mr-3"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
               >
                 取消
               </button>
               <button
                 onClick={handleUpdateInventory}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
                 {isAdmin ? '保存修改' : '重新提交'}
               </button>

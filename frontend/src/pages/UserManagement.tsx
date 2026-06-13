@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Edit2, Eye, EyeOff, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import api from '../utils/api';
 import { User, UserRole } from '../types';
 
@@ -233,12 +234,12 @@ const UserManagement: React.FC = () => {
   if (isLoading) return <div className="p-4">加载中...</div>;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-      <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+    <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
         <h3 className="text-lg font-medium text-gray-900">用户管理</h3>
         <button
           onClick={() => handleOpenModal()}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+          className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 sm:w-auto"
         >
           <Plus className="w-4 h-4 mr-2" />
           添加用户
@@ -260,7 +261,7 @@ const UserManagement: React.FC = () => {
         </div>
       )}
 
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto md:block">
         <table className="min-w-[900px] w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
@@ -375,16 +376,105 @@ const UserManagement: React.FC = () => {
         </table>
       </div>
 
+      <div className="space-y-3 p-4 md:hidden">
+        {users?.map((user) => {
+          const isCurrentUser = user.id === currentUserId;
+          const isDeletingThisUser = deleteUserMutation.isPending && deleteUserMutation.variables?.userId === user.id;
+          const isResettingThisUser = resetPasswordMutation.isPending && resetPasswordMutation.variables?.userId === user.id;
+
+          return (
+            <MobileRecordCard key={user.id}>
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold text-gray-900">{user.name}</div>
+                  <div className="mt-1 text-sm text-gray-500">{user.code || '-'} · {user.username}</div>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${
+                  user.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                }`}>
+                  {user.isActive ? '正常' : '禁用'}
+                </span>
+              </div>
+
+              <MobileFieldGrid>
+                <MobileField
+                  label="角色"
+                  value={
+                    <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+                      user.role === UserRole.ADMIN ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'
+                    }`}>
+                      {user.role === UserRole.ADMIN ? '管理员' : '计件工人'}
+                    </span>
+                  }
+                />
+                <MobileField label="电话" value={user.phone || '-'} align="right" />
+                <MobileField
+                  label="密码"
+                  value={
+                    <span className="inline-flex items-center gap-2">
+                      {user.passwordStatus === 'default'
+                        ? `默认(${visibleDefaultPasswordIds.has(user.id) ? '123456' : '••••••'})`
+                        : '已修改'}
+                      {user.passwordStatus === 'default' ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleDefaultPasswordVisibility(user.id)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                          title={visibleDefaultPasswordIds.has(user.id) ? '隐藏默认密码' : '查看默认密码'}
+                          aria-label={visibleDefaultPasswordIds.has(user.id) ? '隐藏默认密码' : '查看默认密码'}
+                        >
+                          {visibleDefaultPasswordIds.has(user.id) ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      ) : null}
+                    </span>
+                  }
+                />
+                <MobileField label="员工账号" value={user.username} align="right" />
+              </MobileFieldGrid>
+
+              <MobileActionBar>
+                <button
+                  type="button"
+                  onClick={() => handleResetPassword(user)}
+                  disabled={resetPasswordMutation.isPending}
+                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+                >
+                  <RotateCcw className={`h-4 w-4 ${isResettingThisUser ? 'animate-spin' : ''}`} />
+                  {isResettingThisUser ? '重置中' : '重置密码'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenModal(user)}
+                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                >
+                  <Edit2 className="h-4 w-4" />
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteUser(user)}
+                  disabled={isCurrentUser || deleteUserMutation.isPending}
+                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300 disabled:hover:bg-transparent"
+                >
+                  <Trash2 className={`h-4 w-4 ${isDeletingThisUser ? 'animate-pulse' : ''}`} />
+                  删除
+                </button>
+              </MobileActionBar>
+            </MobileRecordCard>
+          );
+        })}
+      </div>
+
       {resettingUser && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex min-h-screen items-center justify-center px-4 pb-20 pt-4 text-center sm:block sm:p-0">
+          <div className="flex min-h-screen items-end justify-center px-0 pb-0 pt-4 text-center sm:block sm:p-0">
             <div className="fixed inset-0 transition-opacity" aria-hidden="true">
               <div className="absolute inset-0 bg-gray-500 opacity-75" onClick={handleCloseResetModal}></div>
             </div>
 
             <span className="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
 
-            <div className="inline-block transform overflow-hidden rounded-lg bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:align-middle">
+            <div className="inline-block w-full transform overflow-hidden rounded-t-2xl bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:rounded-lg sm:align-middle">
               <form onSubmit={handleSubmitResetPassword}>
                 <div className="bg-white px-4 pb-4 pt-5 sm:p-6">
                   <div className="mb-5 flex items-start justify-between gap-4">
@@ -432,7 +522,7 @@ const UserManagement: React.FC = () => {
                   <button
                     type="submit"
                     disabled={resetPasswordMutation.isPending}
-                    className="inline-flex w-full justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300 sm:ml-3 sm:w-auto sm:text-sm"
+                    className="inline-flex min-h-11 w-full justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300 sm:ml-3 sm:w-auto sm:text-sm"
                   >
                     {resetPasswordMutation.isPending ? '重置中...' : '确认重置'}
                   </button>
@@ -440,7 +530,7 @@ const UserManagement: React.FC = () => {
                     type="button"
                     onClick={handleCloseResetModal}
                     disabled={resetPasswordMutation.isPending}
-                    className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300 sm:ml-3 sm:mt-0 sm:w-auto sm:text-sm"
+                    className="mt-3 inline-flex min-h-11 w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300 sm:ml-3 sm:mt-0 sm:w-auto sm:text-sm"
                   >
                     取消
                   </button>
@@ -454,14 +544,14 @@ const UserManagement: React.FC = () => {
       {/* Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+          <div className="flex min-h-screen items-end justify-center px-0 pb-0 pt-4 text-center sm:block sm:p-0">
             <div className="fixed inset-0 transition-opacity" aria-hidden="true">
               <div className="absolute inset-0 bg-gray-500 opacity-75" onClick={handleCloseModal}></div>
             </div>
 
             <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
 
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div className="inline-block w-full transform overflow-hidden rounded-t-2xl bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:rounded-lg sm:align-middle">
               <form onSubmit={handleSubmit}>
                 <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                   <div className="flex justify-between items-center mb-4">
@@ -555,17 +645,17 @@ const UserManagement: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
                   <button
                     type="submit"
-                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
+                    className="inline-flex min-h-11 w-full justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:ml-3 sm:w-auto sm:text-sm"
                   >
                     保存
                   </button>
                   <button
                     type="button"
                     onClick={handleCloseModal}
-                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                    className="mt-3 inline-flex min-h-11 w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:ml-3 sm:mt-0 sm:w-auto sm:text-sm"
                   >
                     取消
                   </button>

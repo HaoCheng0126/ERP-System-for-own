@@ -4,6 +4,7 @@ import { Calendar, Download, X } from 'lucide-react';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
 import Layout from '../components/Layout';
+import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import QueryStateBanner from '../components/QueryStateBanner';
 import api from '../utils/api';
@@ -311,7 +312,7 @@ const Salary: React.FC = () => {
         }
       `}</style>
 
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -320,9 +321,9 @@ const Salary: React.FC = () => {
           onRetry={() => refetch()}
         />
         <div className="mb-6 rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="p-6">
-            <div className="flex flex-wrap items-end gap-4">
-              <div>
+          <div className="p-4 md:p-6">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
+              <div className="min-w-0">
                 <label className="mb-1 block text-sm font-medium text-gray-700">开始日期</label>
                 <DateField
                   value={dateRange.startDate}
@@ -330,7 +331,7 @@ const Salary: React.FC = () => {
                   className="w-full"
                 />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="mb-1 block text-sm font-medium text-gray-700">结束日期</label>
                 <DateField
                   value={dateRange.endDate}
@@ -339,31 +340,31 @@ const Salary: React.FC = () => {
                 />
               </div>
 
-              <div className="flex gap-2 pb-0.5">
+              <div className="grid grid-cols-3 gap-2 pb-0.5 sm:col-span-2 lg:col-span-1">
                 <button
                   onClick={() => handleDateShortcut('month')}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   本月
                 </button>
                 <button
                   onClick={() => handleDateShortcut('year')}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   今年
                 </button>
                 <button
                   onClick={() => handleDateShortcut('all')}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   全部
                 </button>
               </div>
 
-              <div className="ml-auto flex gap-3">
+              <div className="flex flex-col gap-2 sm:col-span-2 sm:flex-row lg:col-span-1 lg:ml-auto">
                 <button
                   onClick={handleSearch}
-                  className="inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+                  className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
                 >
                   <Calendar className="mr-2 h-4 w-4" />
                   查询
@@ -371,7 +372,7 @@ const Salary: React.FC = () => {
                 {salaryReport && (
                   <button
                     onClick={handleExport}
-                    className="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                    className="inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
                   >
                     <Download className="mr-2 h-4 w-4" />
                     导出CSV
@@ -384,7 +385,7 @@ const Salary: React.FC = () => {
 
         {salaryReport && (
           <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[760px]">
                 <thead className="bg-gray-50">
                   <tr>
@@ -432,8 +433,46 @@ const Salary: React.FC = () => {
               </table>
             </div>
 
-            <div className="border-t border-gray-200 bg-gray-50 px-6 py-4">
-              <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="space-y-3 p-4 md:hidden">
+              {(salaryReport.report || []).map((item, index) => (
+                <MobileRecordCard key={item.user.id || index}>
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-base font-semibold text-gray-900">{item.user.name}</div>
+                      <div className="mt-1 text-sm text-gray-500">{item.user.code || item.user.username}</div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-xs text-gray-500">工资</div>
+                      <div className="text-lg font-bold text-blue-600">¥{formatAmount(item.totalAmount)}</div>
+                    </div>
+                  </div>
+                  <MobileFieldGrid>
+                    <MobileField label="总数量" value={item.totalQuantity} />
+                    <MobileField label="记录数" value={item.records?.length || 0} align="right" />
+                  </MobileFieldGrid>
+                  <MobileActionBar>
+                    <button
+                      onClick={() => handleShowDetails(item.user, item.records)}
+                      className="inline-flex min-h-11 flex-1 items-center justify-center rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                    >
+                      查看详情
+                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => setExportUserId(item.user.id)}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-100 px-3 py-2 text-sm font-medium text-emerald-600 hover:bg-emerald-50"
+                      >
+                        <Download className="h-4 w-4" />
+                        导出工资条
+                      </button>
+                    )}
+                  </MobileActionBar>
+                </MobileRecordCard>
+              ))}
+            </div>
+
+            <div className="border-t border-gray-200 bg-gray-50 px-4 py-4 md:px-6">
+              <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3 sm:gap-4">
                 <div>
                   <div className="text-sm text-gray-500">总记录数</div>
                   <div className="text-xl font-bold text-gray-900">{salaryReport.summary?.totalRecords || 0}</div>
@@ -454,7 +493,7 @@ const Salary: React.FC = () => {
 
       {selectedUserRecords && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+          <div className="flex min-h-screen items-end justify-center px-0 pb-0 pt-4 text-center sm:block sm:p-0">
             <div className="fixed inset-0 transition-opacity" aria-hidden="true">
               <div
                 className="absolute inset-0 bg-gray-500 opacity-75"
@@ -466,9 +505,9 @@ const Salary: React.FC = () => {
               &#8203;
             </span>
 
-            <div className="inline-block transform overflow-hidden rounded-lg bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl sm:align-middle">
+            <div className="inline-block w-full transform overflow-hidden rounded-t-2xl bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl sm:rounded-lg sm:align-middle">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="mb-4 flex items-center justify-between">
+                <div className="mb-4 flex items-start justify-between gap-3">
                   <h3 className="text-lg font-medium leading-6 text-gray-900">
                     {selectedUserRecords.user.name} 的工资详情
                   </h3>
@@ -480,8 +519,8 @@ const Salary: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="max-h-[60vh] overflow-y-auto overflow-x-auto">
-                  <table className="min-w-[800px] w-full divide-y divide-gray-200">
+                <div className="max-h-[65vh] overflow-y-auto">
+                  <table className="hidden min-w-[800px] w-full divide-y divide-gray-200 md:table">
                     <thead className="sticky top-0 bg-gray-50">
                       <tr>
                         <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">入库单号</th>
@@ -530,13 +569,53 @@ const Salary: React.FC = () => {
                       </tr>
                     </tfoot>
                   </table>
+                  <div className="space-y-3 md:hidden">
+                    {selectedUserRecords.records.map((record) => (
+                      <MobileRecordCard key={record.id} className="shadow-none">
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-gray-900">{record.recordNumber}</div>
+                            <div className="mt-1 text-xs text-gray-500">{toDateKey(record.createdAt)}</div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="text-xs text-gray-500">金额</div>
+                            <div className="text-base font-bold text-blue-600">¥{formatAmount(record.totalAmount)}</div>
+                          </div>
+                        </div>
+                        <MobileFieldGrid>
+                          <MobileField label="产品" value={`${record.product?.name || '-'} (${record.product?.specification || '-'})`} />
+                          <MobileField label="单价" value={`¥${formatUnitPrice(record.unitPrice)}`} align="right" />
+                          <MobileField label="数量" value={record.quantity} />
+                          <MobileField label="金额" value={`¥${formatAmount(record.totalAmount)}`} align="right" />
+                        </MobileFieldGrid>
+                      </MobileRecordCard>
+                    ))}
+                    <div className="rounded-xl bg-gray-50 p-4">
+                      <MobileFieldGrid>
+                        <MobileField
+                          label="合计数量"
+                          value={selectedUserRecords.records.reduce((sum, record) => sum + Number(record.quantity || 0), 0)}
+                        />
+                        <MobileField
+                          label="合计金额"
+                          value={`¥${formatAmount(
+                            selectedUserRecords.records.reduce(
+                              (sum, record) => sum + Number(record.totalAmount || 0),
+                              0,
+                            ),
+                          )}`}
+                          align="right"
+                        />
+                      </MobileFieldGrid>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
                 <button
                   type="button"
                   onClick={() => setSelectedUserRecords(null)}
-                  className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                  className="mt-3 inline-flex min-h-11 w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
                 >
                   关闭
                 </button>

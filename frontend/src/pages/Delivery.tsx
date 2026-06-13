@@ -5,6 +5,7 @@ import ActionableEmptyState from '../components/ActionableEmptyState';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
 import Layout from '../components/Layout';
+import { MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import ProductAutocomplete from '../components/ProductAutocomplete';
 import QueryStateBanner from '../components/QueryStateBanner';
@@ -498,7 +499,7 @@ const Delivery: React.FC = () => {
         action={{ label: '创建送货单', onClick: openCreateModal }}
       />
 
-      <div className="delivery-page p-8">
+      <div className="delivery-page p-4 md:p-8">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -508,13 +509,13 @@ const Delivery: React.FC = () => {
         />
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="delivery-screen-controls border-b border-gray-200 bg-gray-50 p-4">
-            <div className="flex flex-wrap items-end gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
               <div>
                 <label className="mb-1 block text-xs font-medium text-gray-600">开始日期</label>
                 <DateField
                   value={filterDateRange.startDate}
                   onChange={(value) => setFilterDateRange({ ...filterDateRange, startDate: value })}
-                  className="w-40"
+                  className="w-full lg:w-40"
                 />
               </div>
 
@@ -523,7 +524,7 @@ const Delivery: React.FC = () => {
                 <DateField
                   value={filterDateRange.endDate}
                   onChange={(value) => setFilterDateRange({ ...filterDateRange, endDate: value })}
-                  className="w-40"
+                  className="w-full lg:w-40"
                 />
               </div>
 
@@ -533,7 +534,7 @@ const Delivery: React.FC = () => {
                     const today = new Date().toISOString().split('T')[0];
                     setFilterDateRange({ startDate: today, endDate: today });
                   }}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                  className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 lg:w-auto"
                 >
                   今日
                 </button>
@@ -544,7 +545,7 @@ const Delivery: React.FC = () => {
                 <select
                   value={filterCustomerId}
                   onChange={(e) => setFilterCustomerId(e.target.value)}
-                  className="block w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
                 >
                   <option value="">所有客户</option>
                   {customers?.map((customer) => (
@@ -560,7 +561,7 @@ const Delivery: React.FC = () => {
                 <select
                   value={filterProductId}
                   onChange={(e) => setFilterProductId(e.target.value)}
-                  className="block w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
                 >
                   <option value="">所有产品</option>
                   {products?.map((product) => (
@@ -576,7 +577,7 @@ const Delivery: React.FC = () => {
                 <select
                   value={filterSpec}
                   onChange={(e) => setFilterSpec(e.target.value)}
-                  className="block w-44 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none"
+                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
                 >
                   <option value="">所有规格</option>
                   {[...new Set(
@@ -591,7 +592,7 @@ const Delivery: React.FC = () => {
                 </select>
               </div>
 
-              <div className="ml-auto flex gap-2 pb-0.5">
+              <div className="flex gap-2 pb-0.5 sm:col-span-2 lg:col-span-1 lg:ml-auto">
                 {(filterCustomerId || filterDateRange.startDate || filterDateRange.endDate || filterProductId || filterSpec) && (
                   <button
                     onClick={() => {
@@ -600,7 +601,7 @@ const Delivery: React.FC = () => {
                       setFilterProductId('');
                       setFilterSpec('');
                     }}
-                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-amber-700 transition-colors hover:bg-amber-50"
+                    className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-amber-700 transition-colors hover:bg-amber-50 lg:w-auto"
                   >
                     清除筛选
                   </button>
@@ -610,7 +611,7 @@ const Delivery: React.FC = () => {
             </div>
           </div>
 
-          <div className="delivery-screen-layout p-6">
+          <div className="delivery-screen-layout p-4 md:p-6">
             {!isLoading && groupedOrders.length === 0 ? (
               <ActionableEmptyState
                 icon={Truck}
@@ -638,7 +639,7 @@ const Delivery: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => toggleCompanyExpand(companyGroup.customerId)}
-                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-gray-50"
+                        className="flex w-full flex-col gap-4 px-4 py-4 text-left transition-colors hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between sm:px-5"
                       >
                         <div className="flex min-w-0 items-center gap-3">
                           <div className="text-gray-400">
@@ -649,19 +650,19 @@ const Delivery: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 flex-wrap items-center gap-6 text-right">
-                          <div>
+                        <div className="grid w-full grid-cols-2 gap-3 text-left sm:w-auto sm:flex sm:shrink-0 sm:flex-wrap sm:items-center sm:gap-6 sm:text-right">
+                          <div className="rounded-lg bg-gray-50 p-3 sm:bg-transparent sm:p-0">
                             <p className="text-xs uppercase tracking-[0.18em] text-gray-400">送货单数量</p>
                             <p className="mt-1 text-lg font-semibold text-gray-900">{companyGroup.orderCount}</p>
                           </div>
-                          <div>
+                          <div className="rounded-lg bg-gray-50 p-3 text-right sm:bg-transparent sm:p-0">
                             <p className="text-xs uppercase tracking-[0.18em] text-gray-400">总货款</p>
                             <p className="mt-1 text-lg font-semibold text-gray-900">¥{formatAmount(companyGroup.totalAmount)}</p>
                           </div>
                           <button
                             type="button"
                             onClick={(event) => handleOpenCompanyExport(companyGroup.customerId, event)}
-                            className="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50"
+                            className="col-span-2 inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 sm:col-span-1"
                             title="导出 PDF"
                           >
                             <Download className="mr-1 h-4 w-4" />
@@ -704,22 +705,22 @@ const Delivery: React.FC = () => {
                                         </div>
                                       </div>
 
-                                      <div className="flex flex-wrap items-start gap-3">
-                                        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-right">
+                                      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start">
+                                        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-left sm:text-right">
                                           <div className="text-xs uppercase tracking-[0.18em] text-gray-400">本单金额</div>
                                           <div className="mt-1 text-lg font-semibold text-gray-900">
                                             ¥{formatAmount(orderGroup.totalAmount)}
                                           </div>
                                         </div>
 
-                                        <div className="flex gap-2">
+                                        <div className="grid grid-cols-2 gap-2 sm:flex">
                                           <button
                                             type="button"
                                             onClick={(event) => {
                                               event.stopPropagation();
                                               handleEditOrder(orderGroup.order);
                                             }}
-                                            className="rounded-md border border-gray-300 p-2 text-emerald-700 transition-colors hover:bg-emerald-50"
+                                            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-gray-300 p-2 text-emerald-700 transition-colors hover:bg-emerald-50"
                                             title="编辑"
                                           >
                                             <Edit className="h-4 w-4" />
@@ -730,7 +731,7 @@ const Delivery: React.FC = () => {
                                               event.stopPropagation();
                                               handleDeleteOrder(orderGroup.order);
                                             }}
-                                            className="rounded-md border border-gray-300 p-2 text-red-600 transition-colors hover:bg-red-50"
+                                            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-gray-300 p-2 text-red-600 transition-colors hover:bg-red-50"
                                             title="删除"
                                           >
                                             <Trash2 className="h-4 w-4" />
@@ -741,7 +742,7 @@ const Delivery: React.FC = () => {
 
                                     {isOrderExpanded && (
                                       <div className="border-t border-gray-200 px-4 py-4">
-                                        <div className="overflow-x-auto">
+                                        <div className="hidden overflow-x-auto md:block">
                                           <table className="min-w-full divide-y divide-gray-200">
                                             <thead className="bg-gray-50">
                                               <tr>
@@ -774,6 +775,26 @@ const Delivery: React.FC = () => {
                                               ))}
                                             </tbody>
                                           </table>
+                                        </div>
+                                        <div className="space-y-3 md:hidden">
+                                          {orderGroup.items.map((item, index) => (
+                                            <MobileRecordCard key={item.id || `${orderGroup.order.id}-${index}`} className="shadow-none">
+                                              <div className="mb-3 flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                  <div className="text-sm font-semibold text-gray-900">{item.product?.name || '-'}</div>
+                                                  <div className="mt-1 text-xs text-gray-500">{item.product?.specification || '-'}</div>
+                                                </div>
+                                                <div className="shrink-0 text-right">
+                                                  <div className="text-xs text-gray-500">金额</div>
+                                                  <div className="text-base font-bold text-gray-900">¥{formatAmount(item.amount)}</div>
+                                                </div>
+                                              </div>
+                                              <MobileFieldGrid>
+                                                <MobileField label="数量" value={`${item.quantity} ${item.product?.unit || ''}`} />
+                                                <MobileField label="单价" value={formatUnitPrice(item.unitPrice)} align="right" />
+                                              </MobileFieldGrid>
+                                            </MobileRecordCard>
+                                          ))}
                                         </div>
                                       </div>
                                     )}
@@ -883,8 +904,8 @@ const Delivery: React.FC = () => {
       </div>
 
       {showAddModal && (
-        <div className="delivery-modal-root fixed inset-0 h-full w-full overflow-y-auto bg-gray-600 bg-opacity-50">
-          <div className="relative top-20 mx-auto w-full max-w-2xl rounded-md border bg-white p-5 shadow-lg">
+        <div className="delivery-modal-root fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center">
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:max-w-2xl sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-medium text-gray-900">{isEditing ? '编辑送货单' : '创建送货单'}</h3>
               <button onClick={resetEditorState} className="text-gray-400 transition-colors hover:text-gray-600">
@@ -990,7 +1011,7 @@ const Delivery: React.FC = () => {
                         <button
                           onClick={() => handleRemoveItem(index)}
                           disabled={newOrder.items.length === 1}
-                          className="px-2 py-2 text-red-600 transition-colors hover:text-red-900 disabled:cursor-not-allowed disabled:text-gray-300"
+                          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-2 py-2 text-red-600 transition-colors hover:bg-red-50 hover:text-red-900 disabled:cursor-not-allowed disabled:text-gray-300"
                           title="删除此商品"
                         >
                           <Trash2 className="h-5 w-5" />
@@ -1002,7 +1023,7 @@ const Delivery: React.FC = () => {
 
                 <button
                   onClick={handleAddItem}
-                  className="inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 sm:w-auto"
                 >
                   <PlusCircle className="mr-2 h-4 w-4" />
                   添加商品
@@ -1020,16 +1041,16 @@ const Delivery: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={resetEditorState}
-                className="mr-3 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                className="min-h-11 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
               >
                 取消
               </button>
               <button
                 onClick={handleCreateOrUpdateOrder}
-                className="rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
               >
                 {isEditing ? '保存修改' : '创建送货单'}
               </button>
