@@ -36,3 +36,6 @@ npm-debug.log*
 # Local documents / exports
 *.pdf
 *.docx
+
+# Claude Code local config
+.claude/

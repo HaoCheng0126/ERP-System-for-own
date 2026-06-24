@@ -1,13 +1,24 @@
 import { Response } from 'express';
 import { AppDataSource } from '../config/database';
-import { InventoryRecord, InventoryRecordStatus, Customer, DeliveryOrder, DeliveryOrderStatus, Product } from '../entities';
+import { InventoryRecord, InventoryRecordStatus, InventoryRecordSubmissionMode, Customer, Product, ProductType } from '../entities';
 import { AuthRequest } from '../middlewares/auth';
-import { Between, MoreThanOrEqual, LessThanOrEqual } from '../lib/typeorm';
+import { Between } from '../lib/typeorm';
+import { accountingService } from '../services/accountingService';
+
+// 产量/产值/近期记录统计排除「退货扣款」负数记录（只影响工资，不是真正的生产入库）
+const isProductionRecord = (record: InventoryRecord) =>
+  record.submissionMode !== InventoryRecordSubmissionMode.RETURN_DEDUCTION;
 
 const inventoryRepository = AppDataSource.getRepository(InventoryRecord);
 const customerRepository = AppDataSource.getRepository(Customer);
-const deliveryOrderRepository = AppDataSource.getRepository(DeliveryOrder);
 const productRepository = AppDataSource.getRepository(Product);
+
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export const getInventoryStats = async (req: AuthRequest, res: Response) => {
   try {
@@ -29,6 +40,8 @@ export const getInventoryStats = async (req: AuthRequest, res: Response) => {
       startOfRange = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1, 0, 0, 0, 0);
     } else if (timeRange === 'month') {
       startOfRange = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    } else if (timeRange === 'year') {
+      startOfRange = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
     }
 
     // 1. Pending Audits
@@ -38,30 +51,39 @@ export const getInventoryStats = async (req: AuthRequest, res: Response) => {
 
     // 2. Total Production Value (in range)
     const productionRecords = await inventoryRepository.find({
-      where: { createdAt: Between(startOfRange, endOfRange) }
+      where: {
+        createdAt: Between(startOfRange, endOfRange),
+        status: InventoryRecordStatus.APPROVED,
+      }
     });
-    const totalProductionValue = productionRecords.reduce((sum, r) => sum + Number(r.totalAmount), 0);
+    const totalProductionValue = productionRecords.filter(isProductionRecord).reduce((sum, r) => sum + Number(r.totalAmount), 0);
 
     // 3. Product Growth (Today vs Yesterday)
-    const products = await productRepository.find({ where: { isActive: true } });
+    const products = await productRepository.find({ where: { isActive: true, type: ProductType.FINISHED } });
     
     const todayRecords = await inventoryRepository.find({
-      where: { createdAt: Between(startOfDay, endOfDay) },
+      where: {
+        createdAt: Between(startOfDay, endOfDay),
+        status: InventoryRecordStatus.APPROVED,
+      },
       relations: ['product']
     });
 
     const yesterdayRecords = await inventoryRepository.find({
-      where: { createdAt: Between(startOfYesterday, endOfYesterday) },
+      where: {
+        createdAt: Between(startOfYesterday, endOfYesterday),
+        status: InventoryRecordStatus.APPROVED,
+      },
       relations: ['product']
     });
 
     const productGrowth = products.map(product => {
       const todayQty = todayRecords
-        .filter(r => r.productId === product.id)
+        .filter(r => r.productId === product.id && isProductionRecord(r))
         .reduce((sum, r) => sum + r.quantity, 0);
         
       const yesterdayQty = yesterdayRecords
-        .filter(r => r.productId === product.id)
+        .filter(r => r.productId === product.id && isProductionRecord(r))
         .reduce((sum, r) => sum + r.quantity, 0);
 
       let growthRate = 0;
@@ -87,7 +109,7 @@ export const getInventoryStats = async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -99,7 +121,10 @@ export const getSalesStats = async (req: AuthRequest, res: Response) => {
     let startOfRange: Date;
     let endOfRange: Date;
 
-    if (timeRange === 'year') {
+    if (timeRange === 'today') {
+      startOfRange = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      endOfRange = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    } else if (timeRange === 'year') {
       startOfRange = new Date(now.getFullYear(), 0, 1);
       endOfRange = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
     } else {
@@ -108,71 +133,52 @@ export const getSalesStats = async (req: AuthRequest, res: Response) => {
       endOfRange = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     }
 
-    // Convert to YYYY-MM-DD for deliveryDate query
-    const startDateStr = startOfRange.toISOString().split('T')[0];
-    const endDateStr = endOfRange.toISOString().split('T')[0];
-
-    const orders = await deliveryOrderRepository.find({
-      where: {
-        deliveryDate: Between(startDateStr, endDateStr)
-      }
-    });
-
-    const totalSales = orders.reduce((sum, o) => sum + Number(o.totalAmount), 0);
-    
-    const settledAmount = orders.reduce((sum, o) => {
-      if (o.status === DeliveryOrderStatus.SETTLED) {
-        return sum + Number(o.totalAmount);
-      } else if (o.status === DeliveryOrderStatus.PARTIAL) {
-        return sum + Number(o.paidAmount || 0);
-      }
-      return sum;
-    }, 0);
+    const stats = await accountingService.getFinancialStats(toDateKey(startOfRange), toDateKey(endOfRange));
 
     res.json({
-      totalSales,
-      settledAmount
+      ...stats,
+      totalSales: stats.salesAmount,
+      settledAmount: stats.receivedAmount,
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
 export const getCustomerStats = async (req: AuthRequest, res: Response) => {
   try {
-    const customers = await customerRepository.find({ where: { isActive: true } });
-    const orders = await deliveryOrderRepository.find({ relations: ['customer'] }); // Fetch all orders to calculate total stats
-
-    const customerStats = customers.map(customer => {
-      const customerOrders = orders.filter(o => o.customerId === customer.id);
-      
-      const totalAmount = customerOrders.reduce((sum, o) => sum + Number(o.totalAmount), 0);
-      
-      const pendingAmount = customerOrders.reduce((sum, o) => {
-        if (o.status === DeliveryOrderStatus.PENDING) {
-          return sum + Number(o.totalAmount);
-        } else if (o.status === DeliveryOrderStatus.PARTIAL) {
-          return sum + (Number(o.totalAmount) - Number(o.paidAmount || 0));
-        }
-        return sum;
-      }, 0);
-
-      return {
-        id: customer.id,
-        name: customer.name,
-        totalAmount,
-        pendingAmount
-      };
-    });
-
-    // Sort by pending amount desc
-    customerStats.sort((a, b) => b.pendingAmount - a.pendingAmount);
-
-    res.json(customerStats);
+    const stats = await accountingService.getCounterpartyStats();
+    res.json(stats);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
+  }
+};
+
+// 近 N 个月「销售 vs 进货」按月聚合，用于仪表盘经营趋势折线图。
+export const getBusinessTrends = async (req: AuthRequest, res: Response) => {
+  try {
+    const months = Math.min(Math.max(Number(req.query.months) || 6, 1), 12);
+    const now = new Date();
+    const trends: { month: string; label: string; sales: number; purchase: number }[] = [];
+
+    for (let offset = months - 1; offset >= 0; offset -= 1) {
+      const start = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - offset + 1, 0, 23, 59, 59, 999);
+      const stats = await accountingService.getFinancialStats(toDateKey(start), toDateKey(end));
+      trends.push({
+        month: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`,
+        label: `${start.getMonth() + 1}月`,
+        sales: stats.salesAmount,
+        purchase: stats.purchaseAmount,
+      });
+    }
+
+    res.json({ trends });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -195,14 +201,20 @@ export const getAdminStats = async (req: AuthRequest, res: Response) => {
 
     // 1. Today's Inventory Count (Created today)
     const todayRecords = await inventoryRepository.find({
-      where: { createdAt: Between(startOfDay, endOfDay) }
+      where: {
+        createdAt: Between(startOfDay, endOfDay),
+        status: InventoryRecordStatus.APPROVED,
+      }
     });
-    const todayInventoryCount = todayRecords.reduce((sum, r) => sum + r.quantity, 0);
+    const todayInventoryCount = todayRecords.filter(isProductionRecord).reduce((sum, r) => sum + r.quantity, 0);
 
     const yesterdayRecords = await inventoryRepository.find({
-      where: { createdAt: Between(startOfYesterday, endOfYesterday) }
+      where: {
+        createdAt: Between(startOfYesterday, endOfYesterday),
+        status: InventoryRecordStatus.APPROVED,
+      }
     });
-    const yesterdayInventoryCount = yesterdayRecords.reduce((sum, r) => sum + r.quantity, 0);
+    const yesterdayInventoryCount = yesterdayRecords.filter(isProductionRecord).reduce((sum, r) => sum + r.quantity, 0);
 
     let todayGrowthRate = 0;
     if (yesterdayInventoryCount > 0) {
@@ -217,19 +229,11 @@ export const getAdminStats = async (req: AuthRequest, res: Response) => {
     });
 
     // 3. Current Month Output Value (Delivery Orders Total Amount)
-    const currentMonthDeliveryOrders = await deliveryOrderRepository.find({
-      where: {
-        deliveryDate: Between(startOfMonth.toISOString().split('T')[0], endOfMonth.toISOString().split('T')[0])
-      }
-    });
-    const currentMonthOutputValue = currentMonthDeliveryOrders.reduce((sum, r) => sum + Number(r.totalAmount), 0);
+    const currentMonthStats = await accountingService.getFinancialStats(toDateKey(startOfMonth), toDateKey(endOfMonth));
+    const currentMonthOutputValue = currentMonthStats.salesAmount;
 
-    const lastMonthDeliveryOrders = await deliveryOrderRepository.find({
-      where: {
-        deliveryDate: Between(startOfLastMonth.toISOString().split('T')[0], endOfLastMonth.toISOString().split('T')[0])
-      }
-    });
-    const lastMonthOutputValue = lastMonthDeliveryOrders.reduce((sum, r) => sum + Number(r.totalAmount), 0);
+    const lastMonthStats = await accountingService.getFinancialStats(toDateKey(startOfLastMonth), toDateKey(endOfLastMonth));
+    const lastMonthOutputValue = lastMonthStats.salesAmount;
 
     let monthGrowthRate = 0;
     if (lastMonthOutputValue > 0) {
@@ -239,10 +243,11 @@ export const getAdminStats = async (req: AuthRequest, res: Response) => {
     }
 
     // 4. Active Customers (Total customers for now)
-    const activeCustomerCount = await customerRepository.count();
+    const activeCustomerCount = await customerRepository.count({ where: { isActive: true } });
 
     // 5. Recent Records (Last 5)
     const recentRecords = await inventoryRepository.find({
+      where: { status: InventoryRecordStatus.APPROVED },
       order: { createdAt: 'DESC' },
       take: 5,
       relations: ['submitter', 'product']
@@ -255,7 +260,7 @@ export const getAdminStats = async (req: AuthRequest, res: Response) => {
       currentMonthOutputValue,
       monthGrowthRate,
       activeCustomerCount,
-      recentRecords: recentRecords.map(r => ({
+      recentRecords: recentRecords.filter(isProductionRecord).map(r => ({
         id: r.id,
         recordNumber: r.recordNumber,
         submitterName: r.submitter.name,
@@ -268,7 +273,7 @@ export const getAdminStats = async (req: AuthRequest, res: Response) => {
 
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -338,6 +343,6 @@ export const getEmployeeStats = async (req: AuthRequest, res: Response) => {
     });
 
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

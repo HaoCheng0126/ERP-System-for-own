@@ -1,19 +1,98 @@
 import { Response } from 'express';
 import { AppDataSource } from '../config/database';
-import { Product, ProductPrice, Customer, DeliveryOrder, DeliveryOrderStatus, DeliveryOrderItem, InventoryRecord, UserRole } from '../entities';
+import {
+  Product,
+  ProductType,
+  ProductPrice,
+  Customer,
+  CustomerType,
+  DeliveryOrder,
+  DeliveryOrderStatus,
+  DeliveryOrderItem,
+  InventoryRecord,
+  PurchaseOrder,
+  StockAdjustment,
+  StockAdjustmentReason,
+  UserRole,
+} from '../entities';
 import { AuthRequest } from '../middlewares/auth';
-import { roundCurrencyAmount, roundLineAmount, roundUnitPrice } from '../utils/decimal';
+import { AppError } from '../utils/AppError';
+import type { EntityManager } from '../lib/typeorm';
+import { roundCurrencyAmount, roundLineAmount, roundQuantity, roundUnitPrice } from '../utils/decimal';
+
+type CreateProductData = {
+  name?: string;
+  specification?: string;
+  unit?: string;
+  type?: ProductType;
+  costPrice?: number;
+  basePrice?: number | null;
+  stock?: number;
+};
+
+// 在调用方提供的事务 manager 内创建产品，供送货单/入库单内联新建产品复用。
+// 校验必填项、产品类型、初始库存，并按「名称 + 规格」去重，避免误建重复产品。
+export const createProductWithManager = async (
+  manager: EntityManager,
+  data: CreateProductData,
+): Promise<Product> => {
+  const name = typeof data.name === 'string' ? data.name.trim() : '';
+  const specification = typeof data.specification === 'string' ? data.specification.trim() : '';
+  const unit = typeof data.unit === 'string' ? data.unit.trim() : '';
+  if (!name || !specification || !unit) {
+    throw new AppError('产品名称、规格、单位为必填项', 400);
+  }
+
+  const type = data.type || ProductType.FINISHED;
+  if (!Object.values(ProductType).includes(type)) {
+    throw new AppError('产品类型无效', 400);
+  }
+
+  const stock = data.stock === undefined ? 0 : roundQuantity(data.stock);
+  if (stock < 0) {
+    throw new AppError('初始库存必须大于等于0', 400);
+  }
+
+  const existing = await manager.findOne(Product, {
+    where: { name, specification, isActive: true },
+  });
+  if (existing) {
+    throw new AppError(`产品「${name} - ${specification}」已存在，请直接选择`, 400);
+  }
+
+  const product = manager.create(Product, {
+    name,
+    specification,
+    unit,
+    type,
+    costPrice: roundUnitPrice(data.costPrice),
+    basePrice: data.basePrice === undefined || data.basePrice === null ? null : roundUnitPrice(data.basePrice),
+    stock,
+  });
+  await manager.save(product);
+  return product;
+};
 
 const productRepository = AppDataSource.getRepository(Product);
 const productPriceRepository = AppDataSource.getRepository(ProductPrice);
 const customerRepository = AppDataSource.getRepository(Customer);
 const inventoryRecordRepository = AppDataSource.getRepository(InventoryRecord);
 const deliveryOrderItemRepository = AppDataSource.getRepository(DeliveryOrderItem);
+const purchaseOrderRepository = AppDataSource.getRepository(PurchaseOrder);
 
 export const getProducts = async (req: AuthRequest, res: Response) => {
   try {
+    const requestedType = typeof req.query.type === 'string' ? req.query.type : undefined;
+    const typeFilter = Object.values(ProductType).includes(requestedType as ProductType)
+      ? requestedType as ProductType
+      : undefined;
+    const where = {
+      isActive: true,
+      ...(typeFilter ? { type: typeFilter } : {}),
+    };
+
     const products = await productRepository.find({
-      where: { isActive: true },
+      where: req.user?.role === UserRole.PIECE_RATE ? { isActive: true, type: ProductType.FINISHED } : where,
       order: { createdAt: 'DESC' },
     });
 
@@ -23,13 +102,14 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
         name: product.name,
         specification: product.specification,
         unit: product.unit,
+        type: product.type,
         isActive: product.isActive,
       })));
     }
 
     res.json(products);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -47,7 +127,7 @@ export const getProductById = async (req: AuthRequest, res: Response) => {
 
     res.json(product);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -64,51 +144,95 @@ export const getProductBySpecification = async (req: AuthRequest, res: Response)
 
     res.json(product);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
 export const createProduct = async (req: AuthRequest, res: Response) => {
   try {
-    if (req.body.stock === undefined || Number(req.body.stock) < 0) {
-      return res.status(400).json({ message: '初始库存必须大于等于0' });
-    }
-    const product = productRepository.create({
-      ...req.body,
-      costPrice: roundUnitPrice(req.body.costPrice),
-      basePrice: req.body.basePrice === undefined || req.body.basePrice === null ? null : roundUnitPrice(req.body.basePrice),
-    });
-    await productRepository.save(product);
+    const product = await AppDataSource.transaction((manager) =>
+      createProductWithManager(manager, req.body),
+    );
     res.status(201).json({ message: '产品创建成功', product });
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+  } catch (error: any) {
+    if (error instanceof AppError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
 export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const product = await productRepository.findOne({ where: { id } });
-    
+    const nextStock = req.body.stock !== undefined ? roundQuantity(req.body.stock) : undefined;
+    if (nextStock !== undefined && nextStock < 0) {
+      return res.status(400).json({ message: '库存不能小于0' });
+    }
+    if (req.body.type !== undefined && !Object.values(ProductType).includes(req.body.type)) {
+      return res.status(400).json({ message: '产品类型无效' });
+    }
+
+    const product = await AppDataSource.transaction(async (manager) => {
+      const productInTransaction = await manager.findOne(Product, { where: { id } });
+      if (!productInTransaction) {
+        return null;
+      }
+
+      if (req.body.type !== undefined && req.body.type !== productInTransaction.type) {
+        const [inventoryCount, deliveryCount, purchaseCount] = await Promise.all([
+          manager.count(InventoryRecord, { where: { productId: id } }),
+          manager.count(DeliveryOrderItem, { where: { productId: id } }),
+          manager.count(PurchaseOrder, { where: { productId: id } }),
+        ]);
+        if (inventoryCount + deliveryCount + purchaseCount > 0) {
+          throw new Error('该产品已有业务记录，不能修改产品类型');
+        }
+      }
+
+      const previousStock = Number(productInTransaction.stock || 0);
+      const { stockAdjustmentRemark, ...productUpdate } = req.body;
+      manager.merge(Product, productInTransaction, productUpdate);
+      if (req.body.costPrice !== undefined) {
+        productInTransaction.costPrice = roundUnitPrice(req.body.costPrice);
+      }
+      if (req.body.basePrice !== undefined) {
+        productInTransaction.basePrice = req.body.basePrice === null ? null : roundUnitPrice(req.body.basePrice);
+      }
+      if (nextStock !== undefined) {
+        productInTransaction.stock = nextStock;
+      }
+
+      await manager.save(productInTransaction);
+
+      if (nextStock !== undefined && Math.abs(previousStock - nextStock) > 0.0001) {
+        const adjustment = manager.create(StockAdjustment, {
+          productId: productInTransaction.id,
+          adjustedBy: req.user?.id || null,
+          previousStock,
+          deltaQuantity: roundQuantity(nextStock - previousStock),
+          nextStock,
+          reason: StockAdjustmentReason.MANUAL_CORRECTION,
+          remark: typeof stockAdjustmentRemark === 'string' && stockAdjustmentRemark.trim()
+            ? stockAdjustmentRemark.trim()
+            : null,
+        });
+        await manager.save(adjustment);
+      }
+
+      return productInTransaction;
+    });
+
     if (!product) {
       return res.status(404).json({ message: '产品不存在' });
     }
 
-    if (req.body.stock !== undefined && Number(req.body.stock) < 0) {
-      return res.status(400).json({ message: '库存不能小于0' });
-    }
-
-    productRepository.merge(product, req.body);
-    if (req.body.costPrice !== undefined) {
-      product.costPrice = roundUnitPrice(req.body.costPrice);
-    }
-    if (req.body.basePrice !== undefined) {
-      product.basePrice = req.body.basePrice === null ? null : roundUnitPrice(req.body.basePrice);
-    }
-    await productRepository.save(product);
     res.json({ message: '产品更新成功', product });
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+  } catch (error: any) {
+    if (error?.message === '该产品已有业务记录，不能修改产品类型') {
+      return res.status(400).json({ message: error.message });
+    }
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -133,11 +257,16 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: '该产品存在送货记录，无法删除' });
     }
 
+    const hasPurchaseOrders = await purchaseOrderRepository.count({ where: { productId: id } });
+    if (hasPurchaseOrders > 0) {
+      return res.status(400).json({ message: '该产品存在进货记录，无法删除' });
+    }
+
     product.isActive = false;
     await productRepository.save(product);
     res.json({ message: '产品已删除' });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -150,7 +279,7 @@ export const getProductPrices = async (req: AuthRequest, res: Response) => {
     });
     res.json(prices);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -187,7 +316,7 @@ export const getProductPriceForCustomer = async (req: AuthRequest, res: Response
 
     res.json({ ...priceRecord, source: 'fixed' });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -202,6 +331,12 @@ export const setProductPriceForCustomer = async (req: AuthRequest, res: Response
 
     if (!product || !customer) {
       return res.status(404).json({ message: '产品或客户不存在' });
+    }
+    if (product.type !== ProductType.FINISHED) {
+      return res.status(400).json({ message: '只有成品可以设置客户送货单价' });
+    }
+    if (customer.type !== CustomerType.CLIENT) {
+      return res.status(400).json({ message: '客户送货单价只能设置给客户' });
     }
 
     let priceRecord = await productPriceRepository.findOne({
@@ -259,7 +394,7 @@ export const setProductPriceForCustomer = async (req: AuthRequest, res: Response
 
     res.json({ message: '价格设置成功', price: priceRecord });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -278,6 +413,6 @@ export const deleteProductPrice = async (req: AuthRequest, res: Response) => {
     await productPriceRepository.delete(priceId);
     res.json({ message: '客户定价已删除' });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

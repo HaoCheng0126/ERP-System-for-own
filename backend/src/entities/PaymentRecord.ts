@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from '../lib/typeorm';
+import { Entity, Index, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from '../lib/typeorm';
 import { Customer } from './Customer';
 import { ColumnNumericTransformer } from '../utils/transformers';
 
@@ -11,6 +11,7 @@ export enum PaymentMethod {
 }
 
 @Entity('payment_records')
+@Index(['customerId', 'paymentDate'])
 export class PaymentRecord {
   @PrimaryGeneratedColumn('uuid')
   id: string;

@@ -1,31 +1,39 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Download, FileCheck, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Download, FileCheck, Plus, Trash2 } from 'lucide-react';
 import ActionableEmptyState from '../components/ActionableEmptyState';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
+import FilterPanel, { ActiveFilter, DateShortcutGroup, FilterField } from '../components/FilterPanel';
 import Layout from '../components/Layout';
 import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
-import { Company, Customer, CustomerType, DeliveryOrder, PaymentMethod, PaymentRecord, PurchaseOrder } from '../types';
+import { Company, Customer, CustomerType, DeliveryOrder, PaymentMethod, PaymentRecord, PurchaseOrder, ReconciliationGroup, ReturnOrder } from '../types';
 import { groupDeliveryOrders } from '../utils/deliveryGrouping';
 import { getPurchaseAmount, groupPurchases } from '../utils/purchaseGrouping';
-import { formatAmount, formatDisplayDecimal, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatUnitPrice } from '../utils/format';
+import { DateRangeShortcut, getDateRangeByShortcut } from '../utils/filtering';
 import api from '../utils/api';
-import { createPdfFileFromElement, downloadPdfFile, sharePdfFile, toSafePdfFileName } from '../utils/printShare';
+import { exportPrintable, getShareFallbackMessage, toSafePdfFileName } from '../utils/printShare';
+import DisclosureSection from '../components/records/DisclosureSection';
+import DateSectionHeader from '../components/records/DateSectionHeader';
+import RecordsSummaryBar from '../components/records/RecordsSummaryBar';
+import { useCounterparties } from '../hooks/useCounterparties';
 
 type StatementTypeFilter = 'all' | CustomerType.CLIENT | CustomerType.SUPPLIER;
 type StatementBusinessMode = 'delivery' | 'purchase';
+type StatementActivityScope = 'all' | 'active' | 'balance';
 
 type StatementGroup = {
-  customer: Customer | undefined;
+  customer: Customer;
   mode: StatementBusinessMode;
   orders: DeliveryOrder[];
   deliveryGroups: ReturnType<typeof groupDeliveryOrders>;
   purchases: PurchaseOrder[];
   purchaseGroups: ReturnType<typeof groupPurchases>;
   payments: PaymentRecord[];
+  returns: ReturnOrder[];
   totalBusiness: number;
   totalPayment: number;
   endingBalance: number;
@@ -53,10 +61,7 @@ const getDefaultPeriodRange = () => ({
   endDate: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0],
 });
 
-const getPeriodBounds = (startDate: string, endDate: string) => ({
-  start: startDate || getDefaultPeriodRange().startDate,
-  end: endDate || getDefaultPeriodRange().endDate,
-});
+const getPeriodDisplayValue = (value: string, fallback: string) => value || fallback;
 
 const printFieldValue = (value?: string | number | null) => {
   if (value === undefined || value === null || value === '') {
@@ -87,15 +92,14 @@ const getStatementLabels = (type?: CustomerType) => {
   };
 };
 
-const normalizePaymentDate = (paymentDate: string) => paymentDate;
+const getCustomerTypeLabel = (type?: CustomerType) => (type === CustomerType.SUPPLIER ? '供应商' : '客户');
 
 const Statement: React.FC = () => {
   const navigate = useNavigate();
   const [reconDateRange, setReconDateRange] = useState(getDefaultPeriodRange());
-  const [reconCompanyId, setReconCompanyId] = useState('');
   const [selectedType, setSelectedType] = useState<StatementTypeFilter>('all');
+  const [activityScope, setActivityScope] = useState<StatementActivityScope>('all');
   const [expandedCompanyIds, setExpandedCompanyIds] = useState<Set<string>>(new Set());
-  const [expandedBusinessKeys, setExpandedBusinessKeys] = useState<Set<string>>(new Set());
   const [exportCustomerId, setExportCustomerId] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -119,35 +123,18 @@ const Statement: React.FC = () => {
     },
   });
 
-  const { data: customers } = useQuery({
-    queryKey: ['customers'],
-    queryFn: async () => {
-      const response = await api.get('/customers');
-      return response.data as Customer[];
-    },
-  });
+  const { data: customers } = useCounterparties();
 
-  const { data: deliveryOrders, isLoading: isLoadingOrders } = useQuery({
-    queryKey: ['deliveryOrders', 'all'],
+  const { data: reconciliationGroups, isLoading: isLoadingReconciliation, error: reconciliationError, refetch: refetchReconciliation } = useQuery({
+    queryKey: ['reconciliation', reconDateRange, selectedType, activityScope],
     queryFn: async () => {
-      const response = await api.get('/delivery');
-      return response.data as DeliveryOrder[];
-    },
-  });
-
-  const { data: purchases, isLoading: isLoadingPurchases } = useQuery({
-    queryKey: ['purchases'],
-    queryFn: async () => {
-      const response = await api.get('/purchases');
-      return response.data as PurchaseOrder[];
-    },
-  });
-
-  const { data: payments } = useQuery({
-    queryKey: ['payments'],
-    queryFn: async () => {
-      const response = await api.get('/payments');
-      return response.data as PaymentRecord[];
+      const params = new URLSearchParams();
+      if (reconDateRange.startDate) params.append('startDate', reconDateRange.startDate);
+      if (reconDateRange.endDate) params.append('endDate', reconDateRange.endDate);
+      if (selectedType !== 'all') params.append('type', selectedType);
+      if (activityScope !== 'all') params.append('activityScope', activityScope);
+      const response = await api.get(`/statements/reconciliation?${params.toString()}`);
+      return response.data as ReconciliationGroup[];
     },
   });
 
@@ -160,7 +147,10 @@ const Statement: React.FC = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
+      queryClient.invalidateQueries({ queryKey: ['customerBalance'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
       setShowPaymentModal(false);
       setSelectedCustomerId('');
       setPaymentSubmitError('');
@@ -183,7 +173,10 @@ const Statement: React.FC = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
+      queryClient.invalidateQueries({ queryKey: ['customerBalance'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
     },
   });
 
@@ -195,111 +188,46 @@ const Statement: React.FC = () => {
     [PaymentMethod.PRIVATE_CARD]: '对私-卡号',
   };
 
-  const availableCustomers = useMemo(() => {
-    return (customers || []).filter((customer) => selectedType === 'all' || customer.type === selectedType);
-  }, [customers, selectedType]);
-
   const groupedData = useMemo<StatementGroup[]>(() => {
-    const { start, end } = getPeriodBounds(reconDateRange.startDate, reconDateRange.endDate);
-    const groups: Record<string, StatementGroup> = {};
-
-    (customers || []).forEach((customer) => {
-      groups[customer.id] = {
-        customer,
-        mode: customer.type === CustomerType.SUPPLIER ? 'purchase' : 'delivery',
-        orders: [],
+    return (reconciliationGroups || []).map((group) => {
+      const nextGroup: StatementGroup = {
+        customer: group.customer,
+        mode: group.mode,
+        orders: [...(group.orders || [])],
         deliveryGroups: [],
-        purchases: [],
+        purchases: [...(group.purchases || [])],
         purchaseGroups: [],
-        payments: [],
-        totalBusiness: 0,
-        totalPayment: 0,
-        endingBalance: 0,
-        periodBusiness: 0,
-        periodPayment: 0,
+        payments: [...(group.payments || [])],
+        returns: [...(group.returns || [])],
+        totalBusiness: Number(group.totalBusiness || 0),
+        totalPayment: Number(group.totalPayment || 0),
+        endingBalance: Number(group.endingBalance || 0),
+        periodBusiness: Number(group.periodBusiness || 0),
+        periodPayment: Number(group.periodPayment || 0),
       };
+
+      nextGroup.orders.sort((a, b) => new Date(b.deliveryDate).getTime() - new Date(a.deliveryDate).getTime());
+      nextGroup.purchases.sort((a, b) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime());
+      nextGroup.payments.sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
+      nextGroup.deliveryGroups = groupDeliveryOrders(nextGroup.orders);
+      nextGroup.purchaseGroups = groupPurchases(nextGroup.purchases);
+      return nextGroup;
     });
+  }, [reconciliationGroups]);
 
-    (deliveryOrders || []).forEach((order) => {
-      const group = groups[order.customerId];
-      if (!group || group.mode !== 'delivery') return;
-
-      const amount = Number(order.totalAmount);
-      group.totalBusiness += amount;
-
-      if (order.deliveryDate <= end) {
-        group.endingBalance += amount;
-      }
-
-      if (order.deliveryDate >= start && order.deliveryDate <= end) {
-        group.orders.push(order);
-        group.periodBusiness += amount;
-      }
-    });
-
-    (purchases || []).forEach((purchase) => {
-      if (!purchase.supplierId) return;
-      const group = groups[purchase.supplierId];
-      if (!group || group.mode !== 'purchase') return;
-
-      const amount = getPurchaseAmount(purchase);
-      group.totalBusiness += amount;
-
-      if (purchase.purchaseDate <= end) {
-        group.endingBalance += amount;
-      }
-
-      if (purchase.purchaseDate >= start && purchase.purchaseDate <= end) {
-        group.purchases.push(purchase);
-        group.periodBusiness += amount;
-      }
-    });
-
-    (payments || []).forEach((payment) => {
-      const group = groups[payment.customerId];
-      if (!group) return;
-
-      const amount = Number(payment.amount);
-      group.totalPayment += amount;
-
-      if (normalizePaymentDate(payment.paymentDate) <= end) {
-        group.endingBalance -= amount;
-      }
-
-      if (normalizePaymentDate(payment.paymentDate) >= start && normalizePaymentDate(payment.paymentDate) <= end) {
-        group.payments.push(payment);
-        group.periodPayment += amount;
-      }
-    });
-
-    Object.values(groups).forEach((group) => {
-      group.orders.sort((a, b) => new Date(b.deliveryDate).getTime() - new Date(a.deliveryDate).getTime());
-      group.purchases.sort((a, b) => new Date(b.purchaseDate).getTime() - new Date(a.purchaseDate).getTime());
-      group.payments.sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime());
-      group.deliveryGroups = groupDeliveryOrders(group.orders);
-      group.purchaseGroups = groupPurchases(group.purchases);
-    });
-
-    return Object.values(groups).filter((group) => {
-      const isSelectedCustomer = Boolean(reconCompanyId) && group.customer?.id === reconCompanyId;
-
-      if (reconCompanyId && !isSelectedCustomer) return false;
-      if (selectedType !== 'all' && group.customer?.type !== selectedType) return false;
-      if (isSelectedCustomer) return true;
-
-      return (
-        group.orders.length > 0 ||
-        group.purchases.length > 0 ||
-        group.payments.length > 0 ||
-        Math.abs(group.endingBalance) > 0.0001
-      );
-    });
-  }, [customers, deliveryOrders, payments, purchases, reconCompanyId, reconDateRange.endDate, reconDateRange.startDate, selectedType]);
+  // 汇总条跟随筛选：金额用「本期」口径（随日期范围/类型/有余额变化），而非一直显示累计全部。
+  const statementSummaryStats = useMemo(
+    () => [
+      { label: '往来方', value: String(groupedData.length) },
+      { label: '本期交易额', value: `¥${formatAmount(groupedData.reduce((sum, group) => sum + group.periodBusiness, 0))}` },
+      { label: '本期收付', value: `¥${formatAmount(groupedData.reduce((sum, group) => sum + group.periodPayment, 0))}` },
+    ],
+    [groupedData],
+  );
 
   const printableStatement = useMemo<PrintableStatementData | null>(() => {
     if (!exportCustomerId) return null;
 
-    const { start, end } = getPeriodBounds(reconDateRange.startDate, reconDateRange.endDate);
     const group = groupedData.find((item) => item.customer?.id === exportCustomerId);
     const customer = group?.customer || customers?.find((item) => item.id === exportCustomerId);
 
@@ -335,8 +263,8 @@ const Statement: React.FC = () => {
       company,
       customer,
       customerType: customer.type,
-      periodStart: start,
-      periodEnd: end,
+      periodStart: getPeriodDisplayValue(reconDateRange.startDate, '全部开始'),
+      periodEnd: getPeriodDisplayValue(reconDateRange.endDate, '全部结束'),
       periodBusiness: group?.periodBusiness || 0,
       periodPayment: group?.periodPayment || 0,
       endingBalance: group?.endingBalance || 0,
@@ -357,38 +285,18 @@ const Statement: React.FC = () => {
     [groupedData, selectedCustomerId],
   );
 
-  const selectedCustomerAvailableBalance = useMemo(() => {
-    if (!selectedCustomerId || !newPayment.paymentDate) {
-      return 0;
-    }
+  const { data: selectedCustomerBalance } = useQuery({
+    queryKey: ['customerBalance', selectedCustomerId, newPayment.paymentDate],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (newPayment.paymentDate) params.append('date', newPayment.paymentDate);
+      const response = await api.get(`/payments/balance/${selectedCustomerId}?${params.toString()}`);
+      return response.data as { balance: number };
+    },
+    enabled: Boolean(selectedCustomerId && newPayment.paymentDate),
+  });
 
-    const customer = customers?.find((item) => item.id === selectedCustomerId);
-    if (!customer) return 0;
-
-    const totalBusiness =
-      customer.type === CustomerType.SUPPLIER
-        ? (purchases || []).reduce((sum, purchase) => {
-            if (purchase.supplierId === selectedCustomerId && purchase.purchaseDate <= newPayment.paymentDate) {
-              return sum + getPurchaseAmount(purchase);
-            }
-            return sum;
-          }, 0)
-        : (deliveryOrders || []).reduce((sum, order) => {
-            if (order.customerId === selectedCustomerId && order.deliveryDate <= newPayment.paymentDate) {
-              return sum + Number(order.totalAmount);
-            }
-            return sum;
-          }, 0);
-
-    const totalPayment = (payments || []).reduce((sum, payment) => {
-      if (payment.customerId === selectedCustomerId && payment.paymentDate <= newPayment.paymentDate) {
-        return sum + Number(payment.amount);
-      }
-      return sum;
-    }, 0);
-
-    return totalBusiness - totalPayment;
-  }, [customers, deliveryOrders, newPayment.paymentDate, payments, purchases, selectedCustomerId]);
+  const selectedCustomerAvailableBalance = Number(selectedCustomerBalance?.balance || 0);
 
   const selectedStatementLabels = getStatementLabels(selectedCustomer?.type);
   const enteredPaymentAmount = Number(newPayment.amount || 0);
@@ -405,16 +313,6 @@ const Statement: React.FC = () => {
       next.add(companyId);
     }
     setExpandedCompanyIds(next);
-  };
-
-  const toggleBusinessExpand = (businessKey: string) => {
-    const next = new Set(expandedBusinessKeys);
-    if (next.has(businessKey)) {
-      next.delete(businessKey);
-    } else {
-      next.add(businessKey);
-    }
-    setExpandedBusinessKeys(next);
   };
 
   const handleAddPayment = () => {
@@ -453,51 +351,64 @@ const Statement: React.FC = () => {
     );
 
     try {
-      const file = await createPdfFileFromElement(printableStatementRef.current, {
-        filename,
-        orientation: 'portrait',
-        marginMm: 12,
-      });
+      const result = await exportPrintable(
+        printableStatementRef.current,
+        {
+          filename,
+          orientation: 'portrait',
+          marginMm: 12,
+          title: filename.replace(/\.pdf$/i, ''),
+          text: `${printableStatement.customer.name}的对账单`,
+        },
+        action,
+      );
 
-      if (action === 'save') {
-        downloadPdfFile(file);
-        setExportCustomerId(null);
-        return;
-      }
-
-      const result = await sharePdfFile(file, {
-        title: filename.replace(/\.pdf$/i, ''),
-        text: `${printableStatement.customer.name}的对账单`,
-      });
-
-      if (result === 'downloaded') {
-        window.alert('当前浏览器无法直接分享到微信，已保存 PDF，可发送到微信。');
+      if (result === 'fallback-download') {
+        window.alert(getShareFallbackMessage());
       }
       if (result !== 'cancelled') {
         setExportCustomerId(null);
       }
     } catch {
-      window.alert('PDF 生成失败，请稍后重试。');
+      window.alert('导出失败，请稍后重试。');
     } finally {
       setIsExportingPdf(false);
     }
   };
 
-  const handleDateShortcut = (type: 'month' | 'year' | 'all') => {
-    const today = new Date();
-    let startDate = '';
-    let endDate = '';
-
-    if (type === 'month') {
-      startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-      endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-    } else if (type === 'year') {
-      startDate = new Date(today.getFullYear(), 0, 1).toISOString().split('T')[0];
-      endDate = new Date(today.getFullYear(), 11, 31).toISOString().split('T')[0];
-    }
-
-    setReconDateRange({ startDate, endDate });
+  const handleDateShortcut = (shortcut: DateRangeShortcut) => {
+    setReconDateRange(getDateRangeByShortcut(shortcut));
   };
+
+  const clearFilters = () => {
+    setSelectedType('all');
+    setReconDateRange({ startDate: '', endDate: '' });
+    setActivityScope('all');
+  };
+
+  const activeFilters: ActiveFilter[] = [
+    selectedType !== 'all'
+      ? {
+          key: 'type',
+          label: `类型: ${selectedType === CustomerType.CLIENT ? '客户' : '供应商'}`,
+          onRemove: () => setSelectedType('all'),
+        }
+      : null,
+    reconDateRange.startDate || reconDateRange.endDate
+      ? {
+          key: 'date',
+          label: `日期: ${reconDateRange.startDate || '不限'} 至 ${reconDateRange.endDate || '不限'}`,
+          onRemove: () => setReconDateRange({ startDate: '', endDate: '' }),
+        }
+      : null,
+    activityScope !== 'all'
+      ? {
+          key: 'activityScope',
+          label: '只看有余额',
+          onRemove: () => setActivityScope('all'),
+        }
+      : null,
+  ].filter((item): item is ActiveFilter => Boolean(item));
 
   const renderBusinessDetails = (group: StatementGroup) => {
     const labels = getStatementLabels(group.customer?.type);
@@ -507,192 +418,169 @@ const Statement: React.FC = () => {
 
       return (
         <div>
-          <h4 className="mb-3 text-sm font-medium text-gray-700">
+          <h4 className="mb-3 text-sm font-medium text-ink-secondary">
             {labels.detailTitle} ({group.purchases.length})
           </h4>
-          <div className="space-y-3">
-            {purchaseGroup?.dates.map((dateGroup) => {
-              const businessKey = `${group.customer?.id}:${dateGroup.date}`;
-              const isExpanded = expandedBusinessKeys.has(businessKey);
-
-              return (
-                <div key={businessKey} className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                  <div
-                    className="flex cursor-pointer flex-col gap-3 px-4 py-3 transition-colors hover:bg-gray-50 md:flex-row md:items-start md:justify-between"
-                    onClick={() => toggleBusinessExpand(businessKey)}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 text-gray-400">
-                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                      </div>
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h5 className="text-sm font-semibold text-gray-900">{dateGroup.date}</h5>
-                          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
-                            {dateGroup.purchases.length} 条材料记录
-                          </span>
-                        </div>
-                      </div>
+          {!purchaseGroup || purchaseGroup.dates.length === 0 ? (
+            <div className="rounded-xl border border-line bg-white px-4 py-8 text-center text-sm text-ink-tertiary">
+              无进货记录
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {purchaseGroup.dates.map((dateGroup) => (
+                <div key={dateGroup.date} className="space-y-3">
+                  <DateSectionHeader
+                    date={dateGroup.date}
+                    count={dateGroup.rowCount}
+                    countLabel="条"
+                    amount={dateGroup.totalAmount}
+                    formatAmount={formatAmount}
+                  />
+                  <div className="overflow-hidden rounded-xl border border-line bg-white">
+                    <div className="hidden overflow-x-auto md:block">
+                      <table className="min-w-full">
+                        <thead>
+                          <tr className="border-b border-line bg-canvas text-ink-tertiary">
+                            <th className="px-4 py-2.5 text-left text-xs font-medium">品名</th>
+                            <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
+                            <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                            <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
+                            <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
+                            <th className="px-4 py-2.5 text-left text-xs font-medium">备注</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-line-soft">
+                          {dateGroup.purchases.map((purchase) => (
+                            <tr key={purchase.id} className="transition-colors hover:bg-brand-50/40">
+                              <td className="px-4 py-2.5 text-sm text-ink">{purchase.item}</td>
+                              <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
+                                {formatDisplayDecimal(purchase.quantity, 4)}
+                              </td>
+                              <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">{purchase.unit || '-'}</td>
+                              <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
+                                {formatUnitPrice(purchase.unitPrice)}
+                              </td>
+                              <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-ink">
+                                ¥{formatAmountDetail(getPurchaseAmount(purchase))}
+                              </td>
+                              <td className="px-4 py-2.5 text-sm text-ink-secondary">{purchase.remark || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-
-                    <div className="text-right">
-                      <div className="text-xs text-gray-500">当日总金额</div>
-                      <div className="mt-1 text-sm font-semibold text-gray-900">¥{formatAmount(dateGroup.totalAmount)}</div>
+                    <div className="space-y-3 p-3 md:hidden">
+                      {dateGroup.purchases.map((purchase) => (
+                        <MobileRecordCard key={purchase.id} className="border-line-soft shadow-none">
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-ink">{purchase.item}</div>
+                              <div className="mt-1 text-xs text-ink-tertiary">{purchase.remark || '无备注'}</div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <div className="text-xs text-ink-tertiary">金额</div>
+                              <div className="text-base font-bold tabular-nums text-ink">¥{formatAmountDetail(getPurchaseAmount(purchase))}</div>
+                            </div>
+                          </div>
+                          <MobileFieldGrid>
+                            <MobileField label="数量" value={`${formatDisplayDecimal(purchase.quantity, 4)} ${purchase.unit || ''}`} />
+                            <MobileField label="单价" value={formatUnitPrice(purchase.unitPrice)} align="right" />
+                          </MobileFieldGrid>
+                        </MobileRecordCard>
+                      ))}
                     </div>
                   </div>
-
-                  {isExpanded && (
-                    <div className="border-t border-gray-200 px-4 py-3">
-                      <div className="hidden overflow-x-auto md:block">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">品名</th>
-                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">数量</th>
-                              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">单位</th>
-                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">单价</th>
-                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">金额</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">备注</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200">
-                            {dateGroup.purchases.map((purchase) => (
-                              <tr key={purchase.id} className="hover:bg-gray-50">
-                                <td className="px-3 py-2 text-sm text-gray-900">{purchase.item}</td>
-                                <td className="px-3 py-2 text-right text-sm text-gray-900">
-                                  {formatDisplayDecimal(purchase.quantity, 4)}
-                                </td>
-                                <td className="px-3 py-2 text-center text-sm text-gray-500">{purchase.unit || '-'}</td>
-                                <td className="px-3 py-2 text-right text-sm text-gray-900">{formatUnitPrice(purchase.unitPrice)}</td>
-                                <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                                  ¥{formatAmount(getPurchaseAmount(purchase))}
-                                </td>
-                                <td className="px-3 py-2 text-sm text-gray-500">{purchase.remark || '-'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div className="space-y-3 md:hidden">
-                        {dateGroup.purchases.map((purchase) => (
-                          <MobileRecordCard key={purchase.id} className="shadow-none">
-                            <div className="mb-3 flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-sm font-semibold text-gray-900">{purchase.item}</div>
-                                <div className="mt-1 text-xs text-gray-500">{purchase.remark || '无备注'}</div>
-                              </div>
-                              <div className="shrink-0 text-right">
-                                <div className="text-xs text-gray-500">金额</div>
-                                <div className="text-base font-bold text-gray-900">¥{formatAmount(getPurchaseAmount(purchase))}</div>
-                              </div>
-                            </div>
-                            <MobileFieldGrid>
-                              <MobileField label="数量" value={`${formatDisplayDecimal(purchase.quantity, 4)} ${purchase.unit || ''}`} />
-                              <MobileField label="单价" value={formatUnitPrice(purchase.unitPrice)} align="right" />
-                            </MobileFieldGrid>
-                          </MobileRecordCard>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
-              );
-            })}
-
-            {(!purchaseGroup || purchaseGroup.dates.length === 0) && (
-              <div className="rounded-lg border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500">
-                无进货记录
-              </div>
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
 
+    const deliveryGroup = group.deliveryGroups[0];
+
     return (
       <div>
-        <h4 className="mb-3 text-sm font-medium text-gray-700">
+        <h4 className="mb-3 text-sm font-medium text-ink-secondary">
           {labels.detailTitle} ({group.orders.length})
         </h4>
-        <div className="space-y-3">
-          {group.deliveryGroups[0]?.dates.flatMap((dateGroup) =>
-            dateGroup.orders.map((orderGroup) => {
-              const businessKey = orderGroup.order.id;
-              const isExpanded = expandedBusinessKeys.has(businessKey);
-
-              return (
-                <div key={orderGroup.order.id} className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                  <div
-                    className="flex cursor-pointer flex-col gap-3 px-4 py-3 transition-colors hover:bg-gray-50 md:flex-row md:items-start md:justify-between"
-                    onClick={() => toggleBusinessExpand(businessKey)}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 text-gray-400">
-                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                      </div>
-                      <div>
+        {!deliveryGroup || deliveryGroup.dates.length === 0 ? (
+          <div className="rounded-xl border border-line bg-white px-4 py-8 text-center text-sm text-ink-tertiary">
+            无送货记录
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {deliveryGroup.dates.map((dateGroup) => (
+              <div key={dateGroup.date} className="space-y-3">
+                <DateSectionHeader
+                  date={dateGroup.date}
+                  count={dateGroup.orderCount}
+                  countLabel="单"
+                  amount={dateGroup.totalAmount}
+                  formatAmount={formatAmount}
+                />
+                {dateGroup.orders.map((orderGroup) => (
+                  <article key={orderGroup.order.id} className="overflow-hidden rounded-xl border border-line bg-white">
+                    <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-medium text-gray-500">{dateGroup.date}</span>
-                          <h5 className="text-sm font-semibold text-gray-900">{orderGroup.order.orderNumber}</h5>
-                          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
+                          <h5 className="text-sm font-semibold text-ink">{orderGroup.order.orderNumber}</h5>
+                          <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs text-brand-600">
                             {orderGroup.items.length} 项明细
                           </span>
                         </div>
                         {orderGroup.order.remark && (
-                          <p className="mt-2 text-xs text-gray-500">备注：{orderGroup.order.remark}</p>
+                          <p className="mt-1.5 text-xs text-ink-tertiary">备注：{orderGroup.order.remark}</p>
                         )}
                       </div>
+                      <div className="text-right">
+                        <div className="text-xs text-ink-tertiary">本单金额</div>
+                        <div className="text-sm font-semibold tabular-nums text-ink">¥{formatAmountDetail(orderGroup.totalAmount)}</div>
+                      </div>
                     </div>
-
-                    <div className="text-right">
-                      <div className="text-xs text-gray-500">本单金额</div>
-                      <div className="mt-1 text-sm font-semibold text-gray-900">¥{formatAmount(orderGroup.totalAmount)}</div>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div className="border-t border-gray-200 px-4 py-3">
+                    <div className="border-t border-line-soft">
                       <div className="hidden overflow-x-auto md:block">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">产品名称</th>
-                              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">规格</th>
-                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">数量</th>
-                              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">单位</th>
-                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">单价</th>
-                              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">金额</th>
+                        <table className="min-w-full">
+                          <thead>
+                            <tr className="border-b border-line bg-canvas text-ink-tertiary">
+                              <th className="px-4 py-2.5 text-left text-xs font-medium">产品名称</th>
+                              <th className="px-4 py-2.5 text-left text-xs font-medium">规格</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
+                              <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-gray-200">
+                          <tbody className="divide-y divide-line-soft">
                             {orderGroup.items.map((item) => (
-                              <tr key={item.id} className="hover:bg-gray-50">
-                                <td className="px-3 py-2 text-sm text-gray-900">{item.product?.name || '-'}</td>
-                                <td className="px-3 py-2 text-sm text-gray-500">{item.product?.specification || '-'}</td>
-                                <td className="px-3 py-2 text-right text-sm text-gray-900">
+                              <tr key={item.id} className="transition-colors hover:bg-brand-50/40">
+                                <td className="px-4 py-2.5 text-sm text-ink">{item.product?.name || '-'}</td>
+                                <td className="px-4 py-2.5 text-sm text-ink-secondary">{item.product?.specification || '-'}</td>
+                                <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                   {formatDisplayDecimal(item.quantity, 4)}
                                 </td>
-                                <td className="px-3 py-2 text-center text-sm text-gray-500">{item.product?.unit || '-'}</td>
-                                <td className="px-3 py-2 text-right text-sm text-gray-900">{formatUnitPrice(item.unitPrice)}</td>
-                                <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                                  ¥{formatAmount(item.amount)}
+                                <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">{item.product?.unit || '-'}</td>
+                                <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">{formatUnitPrice(item.unitPrice)}</td>
+                                <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-ink">
+                                  ¥{formatAmountDetail(item.amount)}
                                 </td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                      <div className="space-y-3 md:hidden">
+                      <div className="space-y-3 p-3 md:hidden">
                         {orderGroup.items.map((item) => (
-                          <MobileRecordCard key={item.id} className="shadow-none">
+                          <MobileRecordCard key={item.id} className="border-line-soft shadow-none">
                             <div className="mb-3 flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <div className="text-sm font-semibold text-gray-900">{item.product?.name || '-'}</div>
-                                <div className="mt-1 text-xs text-gray-500">{item.product?.specification || '-'}</div>
+                                <div className="text-sm font-semibold text-ink">{item.product?.name || '-'}</div>
+                                <div className="mt-1 text-xs text-ink-tertiary">{item.product?.specification || '-'}</div>
                               </div>
                               <div className="shrink-0 text-right">
-                                <div className="text-xs text-gray-500">金额</div>
-                                <div className="text-base font-bold text-gray-900">¥{formatAmount(item.amount)}</div>
+                                <div className="text-xs text-ink-tertiary">金额</div>
+                                <div className="text-base font-bold tabular-nums text-ink">¥{formatAmountDetail(item.amount)}</div>
                               </div>
                             </div>
                             <MobileFieldGrid>
@@ -703,18 +591,35 @@ const Statement: React.FC = () => {
                         ))}
                       </div>
                     </div>
-                  )}
+                  </article>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        {group.returns.length > 0 && (
+          <div className="mt-4">
+            <h4 className="mb-2 text-sm font-medium text-rose-600">退货 ({group.returns.length})</h4>
+            <div className="space-y-2">
+              {group.returns.map((ret) => (
+                <div
+                  key={ret.id}
+                  className="flex items-center justify-between rounded-xl border border-rose-100 bg-rose-50/50 px-4 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-ink">{ret.returnNumber}</div>
+                    <div className="text-xs text-ink-tertiary">
+                      {ret.returnDate} · {ret.items.length} 项
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-sm font-semibold tabular-nums text-rose-600">
+                    −¥{formatAmountDetail(ret.totalAmount)}
+                  </div>
                 </div>
-              );
-            }),
-          )}
-
-          {(!group.deliveryGroups[0] || group.deliveryGroups[0].dates.length === 0) && (
-            <div className="rounded-lg border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500">
-              无送货记录
+              ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -799,204 +704,224 @@ const Statement: React.FC = () => {
         }
       `}</style>
 
-      <PageHeader title="对账单管理" subtitle="管理客户与供应商对账、付款和打印" />
+      <PageHeader title="对账单管理" />
 
-      <div className="statement-page space-y-6 p-4 md:p-8">
-        <div className="statement-screen-filters rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">类型筛选</label>
-              <select
-                value={selectedType}
-                onChange={(event) => {
-                  setSelectedType(event.target.value as StatementTypeFilter);
-                  setReconCompanyId('');
-                }}
-                className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm lg:w-40"
-              >
-                <option value="all">全部</option>
-                <option value={CustomerType.CLIENT}>客户</option>
-                <option value={CustomerType.SUPPLIER}>供应商</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">开始日期</label>
-              <DateField
-                value={reconDateRange.startDate}
-                onChange={(value) => setReconDateRange({ ...reconDateRange, startDate: value })}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">结束日期</label>
-              <DateField
-                value={reconDateRange.endDate}
-                onChange={(value) => setReconDateRange({ ...reconDateRange, endDate: value })}
-                className="w-full"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 pb-0.5 sm:col-span-2 lg:col-span-1">
-              <button
-                onClick={() => handleDateShortcut('month')}
-                className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                本月
-              </button>
-              <button
-                onClick={() => handleDateShortcut('year')}
-                className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                今年
-              </button>
-              <button
-                onClick={() => handleDateShortcut('all')}
-                className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                全部
-              </button>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">往来方</label>
-              <select
-                value={reconCompanyId}
-                onChange={(event) => setReconCompanyId(event.target.value)}
-                className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm lg:w-48"
-              >
-                <option value="">所有往来方</option>
-                {availableCustomers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+      <div className="statement-page px-4 pb-4 pt-0 md:px-6 md:pb-6">
+        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+        <div className="statement-screen-filters">
+          <FilterPanel
+            totalCount={(customers || []).length}
+            filteredCount={groupedData.length}
+            activeFilters={activeFilters}
+            onClear={clearFilters}
+            primary={
+              <>
+                <FilterField label="类型筛选" className="lg:w-40">
+                  <select
+                    value={selectedType}
+                    onChange={(event) => setSelectedType(event.target.value as StatementTypeFilter)}
+                    className="block min-h-11 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink shadow-sm transition-colors focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                  >
+                    <option value="all">全部</option>
+                    <option value={CustomerType.CLIENT}>客户</option>
+                    <option value={CustomerType.SUPPLIER}>供应商</option>
+                  </select>
+                </FilterField>
+                <FilterField label="开始日期" className="lg:w-40">
+                  <DateField
+                    value={reconDateRange.startDate}
+                    onChange={(value) => setReconDateRange({ ...reconDateRange, startDate: value })}
+                    className="w-full"
+                  />
+                </FilterField>
+                <FilterField label="结束日期" className="lg:w-40">
+                  <DateField
+                    value={reconDateRange.endDate}
+                    onChange={(value) => setReconDateRange({ ...reconDateRange, endDate: value })}
+                    className="w-full"
+                  />
+                </FilterField>
+                <FilterField label="快捷日期" className="sm:col-span-2 lg:w-56">
+                  <DateShortcutGroup shortcuts={['month', 'year', 'all']} onSelect={handleDateShortcut} />
+                </FilterField>
+                <FilterField label="范围" className="sm:col-span-2 lg:w-auto">
+                  <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-sm text-ink-secondary">
+                    <input
+                      type="checkbox"
+                      checked={activityScope === 'balance'}
+                      onChange={(event) => setActivityScope(event.target.checked ? 'balance' : 'all')}
+                      className="h-4 w-4 rounded border-line text-brand-600 focus:ring-brand-500"
+                    />
+                    只看有余额
+                  </label>
+                </FilterField>
+              </>
+            }
+          />
         </div>
 
-        <div className="statement-screen-list overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          {isLoadingOrders || isLoadingPurchases ? (
+        <div className="statement-screen-list">
+          {isLoadingReconciliation ? (
             <div className="p-8 text-center text-gray-500">加载中...</div>
+          ) : reconciliationError ? (
+            <div className="p-8 text-center">
+              <p className="text-base font-medium text-gray-700">对账数据暂时无法同步</p>
+              <button
+                type="button"
+                onClick={() => refetchReconciliation()}
+                className="mt-3 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                重试
+              </button>
+            </div>
           ) : groupedData.length === 0 ? (
             <div className="p-6">
               <ActionableEmptyState
                 icon={FileCheck}
-                title={(deliveryOrders || []).length || (purchases || []).length ? '没有符合筛选条件的对账记录' : '先创建业务单据，再生成对账'}
-                description={(deliveryOrders || []).length || (purchases || []).length ? '当前筛选条件下没有应收或应付记录，清除筛选后可查看全部往来方。' : '对账数据来自送货单、采购记录和付款记录。冷启动时先创建第一张送货单。'}
-                actionLabel={(deliveryOrders || []).length || (purchases || []).length ? '清除筛选' : '去创建送货单'}
+                title={(customers || []).length ? '没有符合筛选条件的对账记录' : '先添加客户或供应商'}
+                description={(customers || []).length ? '当前筛选条件下没有匹配的往来方，清除筛选后可查看全部客户和供应商。' : '对账管理会跟随客户管理自动显示往来方，再叠加送货、进货、付款和结余款项。'}
+                actionLabel={(customers || []).length ? '清除筛选' : '去客户管理'}
                 onAction={() => {
-                  if ((deliveryOrders || []).length || (purchases || []).length) {
-                    setSelectedType('all');
-                    setReconCompanyId('');
-                    setReconDateRange({ startDate: '', endDate: '' });
+                  if ((customers || []).length) {
+                    clearFilters();
                     return;
                   }
-                  navigate('/delivery');
+                  navigate('/customers');
                 }}
-                secondaryLabel="去客户管理"
-                onSecondaryAction={() => navigate('/customers')}
               />
             </div>
           ) : (
-            <div className="divide-y divide-gray-200">
+            <div className="space-y-3 bg-[#F7F8FA] p-4 md:p-5">
+              <RecordsSummaryBar stats={statementSummaryStats} />
               {groupedData.map((group) => {
                 const companyId = group.customer?.id || 'unknown';
                 const isExpanded = expandedCompanyIds.has(companyId);
                 const labels = getStatementLabels(group.customer?.type);
 
                 return (
-                  <div key={companyId} className="bg-white">
+                  <div
+                    key={companyId}
+                    className="overflow-hidden rounded-xl border border-line bg-white transition-shadow hover:shadow-card"
+                  >
                     <div
-                      className="flex cursor-pointer flex-col gap-4 px-4 py-4 hover:bg-gray-50 md:flex-row md:items-center md:justify-between md:px-6"
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
                       onClick={() => toggleCompanyExpand(companyId)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          toggleCompanyExpand(companyId);
+                        }
+                      }}
+                      className="flex cursor-pointer flex-col gap-4 px-4 py-4 transition-colors hover:bg-canvas md:flex-row md:items-center md:justify-between md:px-5"
                     >
-                      <div className="flex items-start gap-3 md:items-center md:gap-4">
-                        <div className="text-gray-400">
-                          {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                        </div>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-base font-semibold text-white shadow-sm ${
+                            group.customer?.type === CustomerType.SUPPLIER
+                              ? 'from-violet-500 to-[#A78BFA]'
+                              : 'from-brand-500 to-[#7AA0FF]'
+                          }`}
+                        >
+                          {group.customer?.name?.slice(0, 1) || '客'}
+                        </span>
                         <div className="min-w-0">
-                          <h3 className="flex items-center gap-2 text-lg font-medium text-gray-900">
-                            {group.customer?.name}
-                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-500">
-                              {group.customer?.type === CustomerType.CLIENT ? '客户' : '供应商'}
+                          <h3 className="flex items-center gap-2 text-base font-semibold text-ink">
+                            <span className="truncate">{group.customer?.name}</span>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
+                                group.customer?.type === CustomerType.SUPPLIER
+                                  ? 'bg-violet-50 text-violet-600'
+                                  : 'bg-brand-50 text-brand-600'
+                              }`}
+                            >
+                              {getCustomerTypeLabel(group.customer?.type)}
                             </span>
                           </h3>
-                          <p className="mt-1 text-sm text-gray-500">
-                            {labels.periodBusiness}: ¥{formatAmount(group.periodBusiness)} | 本期付款: ¥{formatAmount(group.periodPayment)}
+                          <p className="mt-1 text-xs text-ink-tertiary">
+                            {labels.periodBusiness} ¥{formatAmount(group.periodBusiness)} · 本期付款 ¥{formatAmount(group.periodPayment)}
                           </p>
                         </div>
                       </div>
 
-                      <div className="grid w-full grid-cols-1 gap-3 md:w-auto md:grid-cols-none md:flex md:items-center md:gap-8">
-                        <div className="rounded-lg bg-gray-50 p-3 md:bg-transparent md:p-0 md:text-right">
-                          <p className="text-sm text-gray-500">{labels.totalBusiness}</p>
-                          <p className="text-lg font-bold text-gray-900">¥{formatAmount(group.totalBusiness)}</p>
-                        </div>
-                        <div className="rounded-lg bg-gray-50 p-3 md:bg-transparent md:p-0 md:text-right">
-                          <p className="text-sm text-gray-500">累计已付</p>
-                          <p className="text-lg font-bold text-green-600">¥{formatAmount(group.totalPayment)}</p>
-                        </div>
-                        <div className="rounded-lg bg-gray-50 p-3 md:bg-transparent md:p-0 md:text-right">
-                          <p className="text-sm text-gray-500">{labels.balance}</p>
-                          <p className={`text-lg font-bold ${group.endingBalance >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                            ¥{formatAmount(group.endingBalance)}
-                          </p>
+                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:gap-6">
+                        <div className="flex items-center justify-between gap-6 md:justify-end md:gap-7">
+                          <div className="md:text-right">
+                            <p className="text-xs text-ink-tertiary">{labels.totalBusiness}</p>
+                            <p className="mt-0.5 text-lg font-bold tabular-nums text-ink">¥{formatAmount(group.totalBusiness)}</p>
+                          </div>
+                          <div className="md:text-right">
+                            <p className="text-xs text-ink-tertiary">累计已付</p>
+                            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-600">¥{formatAmount(group.totalPayment)}</p>
+                          </div>
+                          <div className="md:text-right">
+                            <p className="text-xs text-ink-tertiary">{labels.balance}</p>
+                            <p className={`mt-0.5 text-lg font-bold tabular-nums ${group.endingBalance >= 0 ? 'text-rose-600' : 'text-brand-600'}`}>
+                              ¥{formatAmount(group.endingBalance)}
+                            </p>
+                          </div>
                         </div>
 
-                        <button
-                          onClick={(event) => handleOpenStatementExport(companyId, event)}
-                          className="flex min-h-11 items-center justify-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
-                        >
-                          <Download className="h-4 w-4" />
-                          导出对账单
-                        </button>
-
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setSelectedCustomerId(companyId);
-                            setPaymentSubmitError('');
-                            setShowPaymentModal(true);
-                          }}
-                          className="flex min-h-11 items-center justify-center gap-1 rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
-                        >
-                          <Plus className="h-4 w-4" />
-                          登记付款
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(event) => handleOpenStatementExport(companyId, event)}
+                            className="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-medium text-ink-secondary transition-colors hover:border-brand-200 hover:bg-brand-50 hover:text-brand-600 md:flex-none"
+                          >
+                            <Download className="h-4 w-4" />
+                            导出
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedCustomerId(companyId);
+                              setPaymentSubmitError('');
+                              setShowPaymentModal(true);
+                            }}
+                            className="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-700 md:flex-none"
+                          >
+                            <Plus className="h-4 w-4" />
+                            登记付款
+                          </button>
+                          <ChevronDown
+                            className={`hidden h-5 w-5 shrink-0 text-ink-tertiary transition-transform duration-300 motion-reduce:transition-none md:block ${
+                              isExpanded ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </div>
                       </div>
                     </div>
 
-                    {isExpanded && (
-                      <div className="grid grid-cols-1 gap-6 border-t border-gray-100 bg-gray-50 px-4 py-4 md:px-6 lg:grid-cols-2">
+                    <DisclosureSection open={isExpanded}>
+                      <div className="grid grid-cols-1 gap-6 border-t border-line bg-canvas px-4 py-4 md:px-5 lg:grid-cols-2">
                         {renderBusinessDetails(group)}
 
                         <div>
-                          <h4 className="mb-3 text-sm font-medium text-gray-700">本期付款记录 ({group.payments.length})</h4>
-                          <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                            <table className="hidden min-w-full divide-y divide-gray-200 md:table">
-                              <thead className="bg-gray-50">
-                                <tr>
-                                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">日期</th>
-                                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">方式</th>
-                                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">金额</th>
-                                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">备注</th>
-                                  <th className="w-10 px-3 py-2"></th>
+                          <h4 className="mb-3 text-sm font-medium text-ink-secondary">本期付款记录 ({group.payments.length})</h4>
+                          <div className="overflow-hidden rounded-xl border border-line bg-white">
+                            <table className="hidden min-w-full md:table">
+                              <thead>
+                                <tr className="border-b border-line bg-canvas text-ink-tertiary">
+                                  <th className="px-4 py-2.5 text-left text-xs font-medium">日期</th>
+                                  <th className="px-4 py-2.5 text-left text-xs font-medium">方式</th>
+                                  <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
+                                  <th className="px-4 py-2.5 text-left text-xs font-medium">备注</th>
+                                  <th className="w-10 px-4 py-2.5"></th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-gray-200">
+                              <tbody className="divide-y divide-line-soft">
                                 {group.payments.map((payment) => (
-                                  <tr key={payment.id} className="hover:bg-gray-50">
-                                    <td className="px-3 py-2 text-sm text-gray-500">{payment.paymentDate}</td>
-                                    <td className="px-3 py-2 text-sm text-gray-900">{paymentMethodLabels[payment.method]}</td>
-                                    <td className="px-3 py-2 text-right text-sm font-medium text-green-600">
+                                  <tr key={payment.id} className="transition-colors hover:bg-brand-50/40">
+                                    <td className="px-4 py-2.5 text-sm text-ink-secondary">{payment.paymentDate}</td>
+                                    <td className="px-4 py-2.5 text-sm text-ink">{paymentMethodLabels[payment.method]}</td>
+                                    <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-emerald-600">
                                       ¥{formatAmount(payment.amount)}
                                     </td>
-                                    <td className="max-w-[120px] truncate px-3 py-2 text-sm text-gray-500">{payment.remarks || '-'}</td>
-                                    <td className="px-3 py-2 text-center">
-                                      <button onClick={() => handleDeletePayment(payment.id)} className="text-gray-400 hover:text-red-600">
+                                    <td className="max-w-[120px] truncate px-4 py-2.5 text-sm text-ink-secondary">{payment.remarks || '-'}</td>
+                                    <td className="px-4 py-2.5 text-center">
+                                      <button onClick={() => handleDeletePayment(payment.id)} className="text-ink-tertiary transition-colors hover:text-rose-600">
                                         <Trash2 className="h-4 w-4" />
                                       </button>
                                     </td>
@@ -1004,7 +929,7 @@ const Statement: React.FC = () => {
                                 ))}
                                 {group.payments.length === 0 && (
                                   <tr>
-                                    <td colSpan={5} className="px-3 py-4 text-center text-sm text-gray-500">
+                                    <td colSpan={5} className="px-4 py-6 text-center text-sm text-ink-tertiary">
                                       无付款记录
                                     </td>
                                   </tr>
@@ -1013,15 +938,15 @@ const Statement: React.FC = () => {
                             </table>
                             <div className="space-y-3 p-3 md:hidden">
                               {group.payments.map((payment) => (
-                                <MobileRecordCard key={payment.id} className="shadow-none">
+                                <MobileRecordCard key={payment.id} className="border-line-soft shadow-none">
                                   <div className="mb-3 flex items-start justify-between gap-3">
                                     <div>
-                                      <div className="text-sm font-semibold text-gray-900">{payment.paymentDate}</div>
-                                      <div className="mt-1 text-xs text-gray-500">{paymentMethodLabels[payment.method]}</div>
+                                      <div className="text-sm font-semibold text-ink">{payment.paymentDate}</div>
+                                      <div className="mt-1 text-xs text-ink-tertiary">{paymentMethodLabels[payment.method]}</div>
                                     </div>
                                     <div className="text-right">
-                                      <div className="text-xs text-gray-500">金额</div>
-                                      <div className="text-base font-bold text-green-600">¥{formatAmount(payment.amount)}</div>
+                                      <div className="text-xs text-ink-tertiary">金额</div>
+                                      <div className="text-base font-bold tabular-nums text-emerald-600">¥{formatAmount(payment.amount)}</div>
                                     </div>
                                   </div>
                                   <MobileField label="备注" value={payment.remarks || '-'} />
@@ -1029,7 +954,7 @@ const Statement: React.FC = () => {
                                     <button
                                       type="button"
                                       onClick={() => handleDeletePayment(payment.id)}
-                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-rose-100 px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50"
                                     >
                                       <Trash2 className="h-4 w-4" />
                                       删除
@@ -1038,18 +963,19 @@ const Statement: React.FC = () => {
                                 </MobileRecordCard>
                               ))}
                               {group.payments.length === 0 && (
-                                <div className="px-3 py-4 text-center text-sm text-gray-500">无付款记录</div>
+                                <div className="px-3 py-4 text-center text-sm text-ink-tertiary">无付款记录</div>
                               )}
                             </div>
                           </div>
                         </div>
                       </div>
-                    )}
+                    </DisclosureSection>
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
         </div>
 
         {printableStatement && (() => {
@@ -1058,7 +984,7 @@ const Statement: React.FC = () => {
             <>
               <ExportActionDialog
                 title="导出对账单"
-                description={`为 ${printableStatement.customer.name} 保存 PDF，或在手机端分享到微信。`}
+                description={`为 ${printableStatement.customer.name} 生成 PDF 文件，可保存，或打开系统分享面板后选择微信。`}
                 isProcessing={isExportingPdf}
                 onSave={() => handleStatementPdfExport('save')}
                 onShare={() => handleStatementPdfExport('share')}
@@ -1193,7 +1119,7 @@ const Statement: React.FC = () => {
                                 <td className="border border-gray-900 px-2 py-2 text-center align-top">{printFieldValue(purchase.unit)}</td>
                                 <td className="border border-gray-900 px-2 py-2 text-right align-top">{formatUnitPrice(purchase.unitPrice)}</td>
                                 <td className="border border-gray-900 px-2 py-2 text-right align-top">
-                                  ¥{formatAmount(getPurchaseAmount(purchase))}
+                                  ¥{formatAmountDetail(getPurchaseAmount(purchase))}
                                 </td>
                               </tr>
                             )),
@@ -1257,7 +1183,7 @@ const Statement: React.FC = () => {
                                       {formatUnitPrice(item.unitPrice)}
                                     </td>
                                     <td className="border border-gray-900 px-2 py-2 text-right align-top">
-                                      ¥{formatAmount(item.amount)}
+                                      ¥{formatAmountDetail(item.amount)}
                                     </td>
                                   </tr>
                                 );

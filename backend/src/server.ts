@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -18,7 +19,11 @@ import purchaseRoutes from './routes/purchaseRoutes';
 import dashboardRoutes from './routes/dashboardRoutes';
 import paymentRoutes from './routes/paymentRoutes';
 import setupRoutes from './routes/setupRoutes';
+import dataQualityRoutes from './routes/dataQualityRoutes';
+import returnRoutes from './routes/returnRoutes';
+import settingsRoutes from './routes/settingsRoutes';
 import { errorHandler } from './middlewares/errorHandler';
+import { rateLimit } from './middlewares/rateLimit';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -35,8 +40,9 @@ const corsOptions = isProduction
     };
 app.use(helmet());
 app.use(cors(corsOptions));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// 12mb 以容纳送货单图像识别的 base64 图片（压缩后通常 <2mb）。
+app.use(express.json({ limit: '12mb' }));
+app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
 // 健康检查：包含数据库连通性
 app.get('/api/health', async (req, res) => {
@@ -55,6 +61,10 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
+// 限流：登录防爆破、OCR 识别防滥用（调用付费接口 + 大体积请求）
+app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: '登录尝试过于频繁，请 15 分钟后再试' }));
+app.use('/api/delivery/recognize', rateLimit({ windowMs: 60 * 1000, max: 10, message: '识别请求过于频繁，请稍后再试' }));
+
 app.use('/api/auth', authRoutes);
 app.use('/api/company', companyRoutes);
 app.use('/api/customers', customerRoutes);
@@ -68,6 +78,9 @@ app.use('/api/purchases', purchaseRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/setup', setupRoutes);
+app.use('/api/data-quality', dataQualityRoutes);
+app.use('/api/returns', returnRoutes);
+app.use('/api/settings', settingsRoutes);
 app.use(errorHandler);
 
 async function seedInitialData() {
@@ -206,21 +219,33 @@ async function seedInitialData() {
   }
 }
 
-function validateEnv() {
+const WEAK_JWT_SECRETS = [
+  'secret',
+  'your-super-secret-jwt-key-change-in-production',
+  'change-this-in-production',
+];
+
+// 任何环境都执行：生产强制要求强随机 JWT_SECRET；非生产若缺失则生成一次性随机值，
+// 绝不回退到可猜测的固定字符串（旧代码硬编码的 'secret' 可被用来伪造管理员 token）。
+function ensureJwtSecret() {
   const secret = process.env.JWT_SECRET;
-  if (!secret || secret === 'secret' || secret === 'your-super-secret-jwt-key-change-in-production' || secret === 'change-this-in-production') {
-    console.error(
-      '错误: 生产环境必须设置强密码的 JWT_SECRET，且不能使用默认值。请在 .env 中配置。'
-    );
-    process.exit(1);
+  const isWeak = !secret || WEAK_JWT_SECRETS.includes(secret);
+  if (isProduction) {
+    if (isWeak) {
+      console.error('错误: 生产环境必须设置强随机的 JWT_SECRET（不能为空或使用默认值）。请在 .env 中配置。');
+      process.exit(1);
+    }
+    return;
+  }
+  if (!secret) {
+    process.env.JWT_SECRET = crypto.randomBytes(32).toString('hex');
+    console.warn('警告: 未设置 JWT_SECRET，已为本次运行生成随机密钥（重启后登录态会失效）。建议在 .env 配置固定值。');
   }
 }
 
 async function bootstrap() {
   try {
-    if (isProduction) {
-      validateEnv();
-    }
+    ensureJwtSecret();
     await AppDataSource.initialize();
     console.log('Database connected successfully');
 

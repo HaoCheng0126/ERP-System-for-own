@@ -1,16 +1,51 @@
 import { Response } from 'express';
 import { AppDataSource } from '../config/database';
-import { DeliveryOrder, DeliveryOrderItem, DeliveryOrderStatus, Product, Customer, ProductPrice } from '../entities';
+import {
+  DeliveryOrder,
+  DeliveryOrderItem,
+  DeliveryOrderStatus,
+  Product,
+  ProductType,
+  Customer,
+  CustomerType,
+  ProductPrice,
+} from '../entities';
 import { AppError } from '../utils/AppError';
 import { AuthRequest } from '../middlewares/auth';
+import { recognizeDeliveryNote } from '../services/visionService';
 import { In } from '../lib/typeorm';
+import type { EntityManager } from '../lib/typeorm';
 import { roundCurrencyAmount, roundLineAmount, roundQuantity, roundUnitPrice } from '../utils/decimal';
+import { createProductWithManager } from './productController';
+import { inventoryService } from '../services/inventoryService';
 
 const deliveryOrderRepository = AppDataSource.getRepository(DeliveryOrder);
-const deliveryOrderItemRepository = AppDataSource.getRepository(DeliveryOrderItem);
-const productRepository = AppDataSource.getRepository(Product);
 const customerRepository = AppDataSource.getRepository(Customer);
-const productPriceRepository = AppDataSource.getRepository(ProductPrice);
+
+const getFinishedProductOrThrow = async (manager: EntityManager, productId: string) => {
+  const product = await manager.findOne(Product, {
+    where: { id: productId, isActive: true, type: ProductType.FINISHED },
+  });
+  if (!product) {
+    throw new AppError('成品不存在或已停用', 404);
+  }
+  return product;
+};
+
+const adjustProductStock = async (
+  manager: EntityManager,
+  productId: string,
+  deltaQuantity: number,
+  errorMessage = '成品库存不足，无法创建送货单',
+) => {
+  const product = await getFinishedProductOrThrow(manager, productId);
+  const nextStock = roundQuantity((Number(product.stock) || 0) + Number(deltaQuantity));
+  if (nextStock < 0) {
+    throw new AppError(errorMessage, 400);
+  }
+  product.stock = nextStock;
+  await manager.save(product);
+};
 
 const generateOrderNumber = async (customerId: string, customerCode: string): Promise<string> => {
   const today = new Date();
@@ -35,6 +70,70 @@ const generateOrderNumber = async (customerId: string, customerCode: string): Pr
   return `${dateStr}-${codeDigits}-${sequence}`;
 };
 
+// 分配入库里「直接入库（不计工资）」的目标标识：只加库存、不生成入库单、不计任何员工工资。
+const DIRECT_INBOUND = '__direct__';
+
+// 处理库存不足时的分配入库：
+//  - 选员工 → 生成已审批入库单（计入该员工计件工资）
+//  - 直接入库(__direct__) → 仅加库存，不计任何人工资
+// 合计必须覆盖缺口，否则抛错使整事务回滚。
+const applyInboundAllocations = async (
+  manager: EntityManager,
+  actorId: string,
+  productId: string,
+  shortfall: number,
+  rawAllocations: any[],
+) => {
+  let directQty = 0;
+  const employeeAllocations: { submittedBy: string; productId: string; quantity: number }[] = [];
+  for (const raw of rawAllocations) {
+    const quantity = roundQuantity(raw.quantity);
+    if (!(quantity > 0)) {
+      throw new AppError('分配入库数量必须大于0', 400);
+    }
+    if (!raw.employeeId) {
+      throw new AppError('请选择分配方式（员工或直接入库）', 400);
+    }
+    if (raw.employeeId === DIRECT_INBOUND) {
+      directQty = roundQuantity(directQty + quantity);
+    } else {
+      employeeAllocations.push({ submittedBy: raw.employeeId, productId, quantity });
+    }
+  }
+  const allocated = roundQuantity(
+    directQty + employeeAllocations.reduce((sum, allocation) => sum + allocation.quantity, 0),
+  );
+  if (allocated < shortfall) {
+    throw new AppError(`分配入库数量不足以覆盖缺口（缺 ${shortfall}，已分配 ${allocated}）`, 400);
+  }
+  if (directQty > 0) {
+    await adjustProductStock(manager, productId, directQty);
+  }
+  if (employeeAllocations.length > 0) {
+    await inventoryService.createApprovedRecordsWithManager(manager, actorId, employeeAllocations);
+  }
+};
+
+// 把本单为某客户登记的成品单价回写到「客户专属单价」(product_prices)，让产品管理能看到、下次自动带出。
+const upsertCustomerPrice = async (
+  manager: EntityManager,
+  productId: string,
+  customerId: string,
+  price: number,
+) => {
+  if (price < 0) return;
+  const repo = manager.getRepository(ProductPrice);
+  const existing = await repo.findOne({ where: { productId, customerId } });
+  if (existing) {
+    if (roundUnitPrice(existing.price) !== price) {
+      existing.price = price;
+      await repo.save(existing);
+    }
+  } else {
+    await repo.save(repo.create({ productId, customerId, price }));
+  }
+};
+
 export const getDeliveryOrders = async (req: AuthRequest, res: Response) => {
   try {
     const orders = await deliveryOrderRepository.find({
@@ -43,7 +142,7 @@ export const getDeliveryOrders = async (req: AuthRequest, res: Response) => {
     });
     res.json(orders);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -61,7 +160,7 @@ export const getDeliveryOrderById = async (req: AuthRequest, res: Response) => {
 
     res.json(order);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -69,70 +168,121 @@ export const createDeliveryOrder = async (req: AuthRequest, res: Response) => {
   try {
     const { customerId, deliveryDate, items, remark } = req.body;
 
-    const customer = await customerRepository.findOne({ where: { id: customerId } });
+    if (!req.user) {
+      return res.status(401).json({ message: '未认证' });
+    }
+    const actorId = req.user.id;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: '请至少添加一个产品' });
+    }
+
+    const customer = await customerRepository.findOne({ where: { id: customerId, type: CustomerType.CLIENT } });
     if (!customer) {
       return res.status(404).json({ message: '客户不存在' });
     }
 
     const orderNumber = await generateOrderNumber(customerId, customer.code);
 
-    const orderItems: DeliveryOrderItem[] = [];
-    let totalAmount = 0;
+    const savedOrder = await AppDataSource.transaction(async (manager) => {
+      const orderItems: DeliveryOrderItem[] = [];
+      let totalAmount = 0;
 
-    for (const itemData of items) {
-      const product = await productRepository.findOne({ where: { id: itemData.productId } });
-      if (!product) {
-        return res.status(404).json({ message: `产品 ${itemData.productId} 不存在` });
+      for (const itemData of items) {
+        // 1) 解析产品；支持内联新建产品（自动写入产品管理）
+        let productId: string | undefined = itemData.productId;
+        let newProductPrice: number | undefined;
+        if (itemData.newProduct) {
+          const created = await createProductWithManager(manager, {
+            name: itemData.newProduct.name,
+            specification: itemData.newProduct.specification,
+            unit: itemData.newProduct.unit,
+            type: ProductType.FINISHED,
+            basePrice: itemData.newProduct.unitPrice,
+            costPrice: 0,
+            stock: 0,
+          });
+          productId = created.id;
+          newProductPrice = roundUnitPrice(itemData.newProduct.unitPrice);
+        }
+
+        if (!productId || itemData.quantity === undefined) {
+          throw new AppError('产品ID和数量为必填项', 400);
+        }
+
+        const product = await getFinishedProductOrThrow(manager, productId);
+        const quantity = roundQuantity(itemData.quantity);
+        if (quantity <= 0) {
+          throw new AppError('数量必须大于0', 400);
+        }
+
+        // 2) 现场分配入库：库存不足时分配先入库（选员工计工资 / 直接入库不计工资），随后出库即送出
+        if (Array.isArray(itemData.inboundAllocations) && itemData.inboundAllocations.length > 0) {
+          const currentStock = roundQuantity(Number(product.stock) || 0);
+          const shortfall = roundQuantity(Math.max(0, quantity - currentStock));
+          await applyInboundAllocations(manager, actorId, productId, shortfall, itemData.inboundAllocations);
+        }
+
+        // 3) 定价：新建产品用其送货单价；否则 basePrice → 客户专属价 → 显式覆盖
+        let unitPrice = newProductPrice ?? roundUnitPrice(product.basePrice || 0);
+        if (newProductPrice === undefined) {
+          const priceRecord = await manager.getRepository(ProductPrice).findOne({
+            where: { productId, customerId },
+            order: { createdAt: 'DESC' },
+          });
+          if (priceRecord) {
+            unitPrice = roundUnitPrice(priceRecord.price);
+          }
+        }
+        if (itemData.unitPrice !== undefined) {
+          unitPrice = roundUnitPrice(itemData.unitPrice);
+        }
+        if (unitPrice < 0) {
+          throw new AppError('单价不能小于0', 400);
+        }
+
+        // 回写客户专属单价，让产品管理可见、下次自动带出
+        await upsertCustomerPrice(manager, productId, customerId, unitPrice);
+
+        const amount = roundLineAmount(quantity, unitPrice);
+        totalAmount += amount;
+
+        // 4) 出库扣减（分配入库后净效果=送出）；若仍不足，原校验抛错使整事务回滚
+        await adjustProductStock(manager, productId, -quantity);
+
+        const orderItem = manager.create(DeliveryOrderItem, {
+          productId,
+          quantity,
+          unitPrice,
+          amount,
+        });
+        orderItems.push(orderItem);
       }
 
-      const quantity = roundQuantity(itemData.quantity);
-      let unitPrice = roundUnitPrice(product.basePrice || 0);
-      
-      const priceRecord = await productPriceRepository.findOne({
-        where: { productId: itemData.productId, customerId },
-        order: { createdAt: 'DESC' },
+      const order = manager.create(DeliveryOrder, {
+        orderNumber,
+        customerId,
+        deliveryDate,
+        totalAmount: roundCurrencyAmount(totalAmount),
+        paidAmount: 0,
+        remark,
+        items: orderItems,
+        status: DeliveryOrderStatus.PENDING,
+        stockDeducted: true,
       });
-      if (priceRecord) {
-        unitPrice = roundUnitPrice(priceRecord.price);
-      }
 
-      if (itemData.unitPrice !== undefined) {
-        unitPrice = roundUnitPrice(itemData.unitPrice);
-      }
+      await manager.save(order);
 
-      const amount = roundLineAmount(quantity, unitPrice);
-      totalAmount += amount;
-
-      const orderItem = deliveryOrderItemRepository.create({
-        productId: itemData.productId,
-        quantity,
-        unitPrice,
-        amount,
+      return manager.findOne(DeliveryOrder, {
+        where: { id: order.id },
+        relations: ['customer', 'items', 'items.product'],
       });
-      orderItems.push(orderItem);
-    }
-
-    const order = deliveryOrderRepository.create({
-      orderNumber,
-      customerId,
-      deliveryDate,
-      totalAmount: roundCurrencyAmount(totalAmount),
-      paidAmount: 0,
-      remark,
-      items: orderItems,
-      status: DeliveryOrderStatus.PENDING,
-    });
-
-    await deliveryOrderRepository.save(order);
-
-    const savedOrder = await deliveryOrderRepository.findOne({
-      where: { id: order.id },
-      relations: ['customer', 'items', 'items.product'],
     });
 
     res.status(201).json({ message: '送货单创建成功', order: savedOrder });
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+  } catch (error: any) {
+    if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -197,7 +347,7 @@ export const updateDeliveryOrderStatus = async (req: AuthRequest, res: Response)
 
     res.json({ message: '送货单状态已更新' });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -206,12 +356,17 @@ export const updateDeliveryOrder = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { customerId, deliveryDate, items, remark } = req.body;
 
+    if (!req.user) {
+      return res.status(401).json({ message: '未认证' });
+    }
+    const actorId = req.user.id;
+
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: '请至少添加一个产品' });
     }
 
     for (const item of items) {
-      if (!item.productId || item.quantity === undefined) {
+      if ((!item.productId && !item.newProduct) || item.quantity === undefined) {
         return res.status(400).json({ message: '产品ID和数量为必填项' });
       }
       if (item.quantity <= 0) {
@@ -225,12 +380,26 @@ export const updateDeliveryOrder = async (req: AuthRequest, res: Response) => {
     }
 
     const updatedOrder = await AppDataSource.transaction(async (manager) => {
-      const currentCustomerId = customerId || existingOrder.customerId;
+      const existingOrderInTransaction = await manager.findOne(DeliveryOrder, {
+        where: { id },
+        relations: ['items'],
+      });
+      if (!existingOrderInTransaction) {
+        throw new AppError('送货单不存在', 404);
+      }
+
+      const currentCustomerId = customerId || existingOrderInTransaction.customerId;
 
       if (customerId) {
-        const customer = await manager.findOne(Customer, { where: { id: customerId } });
+        const customer = await manager.findOne(Customer, { where: { id: customerId, type: CustomerType.CLIENT } });
         if (!customer) {
           throw new AppError('客户不存在', 404);
+        }
+      }
+
+      if (existingOrderInTransaction.stockDeducted) {
+        for (const oldItem of existingOrderInTransaction.items || []) {
+          await adjustProductStock(manager, oldItem.productId, Number(oldItem.quantity));
         }
       }
 
@@ -238,30 +407,69 @@ export const updateDeliveryOrder = async (req: AuthRequest, res: Response) => {
       const orderItems: DeliveryOrderItem[] = [];
 
       for (const itemData of items) {
-        const product = await manager.findOne(Product, { where: { id: itemData.productId } });
-        if (!product) {
-          throw new AppError(`产品 ${itemData.productId} 不存在`, 404);
+        let productId: string | undefined = itemData.productId;
+        let newProductPrice: number | undefined;
+        if (itemData.newProduct) {
+          const created = await createProductWithManager(manager, {
+            name: itemData.newProduct.name,
+            specification: itemData.newProduct.specification,
+            unit: itemData.newProduct.unit,
+            type: ProductType.FINISHED,
+            basePrice: itemData.newProduct.unitPrice,
+            costPrice: 0,
+            stock: 0,
+          });
+          productId = created.id;
+          newProductPrice = roundUnitPrice(itemData.newProduct.unitPrice);
         }
 
+        if (!productId || itemData.quantity === undefined) {
+          throw new AppError('产品ID和数量为必填项', 400);
+        }
+
+        const product = await getFinishedProductOrThrow(manager, productId);
         const quantity = roundQuantity(itemData.quantity);
-        let unitPrice = roundUnitPrice(product.basePrice || 0);
-        const priceRecord = await manager.getRepository(ProductPrice).findOne({
-          where: { productId: itemData.productId, customerId: currentCustomerId },
-          order: { createdAt: 'DESC' },
-        });
-        if (priceRecord) {
-          unitPrice = roundUnitPrice(priceRecord.price);
+        if (quantity <= 0) {
+          throw new AppError('数量必须大于0', 400);
+        }
+
+        let unitPrice = newProductPrice ?? roundUnitPrice(product.basePrice || 0);
+        if (newProductPrice === undefined) {
+          const priceRecord = await manager.getRepository(ProductPrice).findOne({
+            where: { productId, customerId: currentCustomerId },
+            order: { createdAt: 'DESC' },
+          });
+          if (priceRecord) {
+            unitPrice = roundUnitPrice(priceRecord.price);
+          }
         }
         if (itemData.unitPrice !== undefined) {
           unitPrice = roundUnitPrice(itemData.unitPrice);
         }
+        if (unitPrice < 0) {
+          throw new AppError('单价不能小于0', 400);
+        }
+
+        // 回写客户专属单价，让产品管理可见、下次自动带出
+        await upsertCustomerPrice(manager, productId, currentCustomerId, unitPrice);
 
         const amount = roundLineAmount(quantity, unitPrice);
         totalAmount += amount;
 
+        if (existingOrderInTransaction.stockDeducted) {
+          // 编辑态分配入库：旧明细已在上方全额加回库存，此处按反扣后的实时库存计算缺口，
+          // 只为新增缺口再分配（生成入库单并计入员工工资），不回滚旧分配记录。
+          if (Array.isArray(itemData.inboundAllocations) && itemData.inboundAllocations.length > 0) {
+            const currentStock = roundQuantity(Number(product.stock) || 0);
+            const shortfall = roundQuantity(Math.max(0, quantity - currentStock));
+            await applyInboundAllocations(manager, actorId, productId, shortfall, itemData.inboundAllocations);
+          }
+          await adjustProductStock(manager, productId, -quantity);
+        }
+
         const orderItem = manager.create(DeliveryOrderItem, {
-          deliveryOrderId: existingOrder.id,
-          productId: itemData.productId,
+          deliveryOrderId: existingOrderInTransaction.id,
+          productId,
           quantity,
           unitPrice,
           amount,
@@ -269,31 +477,31 @@ export const updateDeliveryOrder = async (req: AuthRequest, res: Response) => {
         orderItems.push(orderItem);
       }
 
-      await manager.delete(DeliveryOrderItem, { deliveryOrderId: existingOrder.id });
+      await manager.delete(DeliveryOrderItem, { deliveryOrderId: existingOrderInTransaction.id });
 
-      existingOrder.customerId = currentCustomerId;
-      existingOrder.deliveryDate = deliveryDate || existingOrder.deliveryDate;
-      existingOrder.totalAmount = roundCurrencyAmount(totalAmount);
+      existingOrderInTransaction.customerId = currentCustomerId;
+      existingOrderInTransaction.deliveryDate = deliveryDate || existingOrderInTransaction.deliveryDate;
+      existingOrderInTransaction.totalAmount = roundCurrencyAmount(totalAmount);
       if (remark !== undefined) {
-        existingOrder.remark = remark;
+        existingOrderInTransaction.remark = remark;
       }
-      existingOrder.items = orderItems;
+      existingOrderInTransaction.items = orderItems;
 
-      await manager.save(existingOrder);
+      await manager.save(existingOrderInTransaction);
 
-      if (existingOrder.status === DeliveryOrderStatus.SETTLED) {
-        existingOrder.paidAmount = roundCurrencyAmount(existingOrder.totalAmount);
-      } else if (existingOrder.status === DeliveryOrderStatus.PARTIAL) {
-        const maxPaid = Number(existingOrder.totalAmount);
-        existingOrder.paidAmount = roundCurrencyAmount(Math.min(Number(existingOrder.paidAmount || 0), maxPaid));
+      if (existingOrderInTransaction.status === DeliveryOrderStatus.SETTLED) {
+        existingOrderInTransaction.paidAmount = roundCurrencyAmount(existingOrderInTransaction.totalAmount);
+      } else if (existingOrderInTransaction.status === DeliveryOrderStatus.PARTIAL) {
+        const maxPaid = Number(existingOrderInTransaction.totalAmount);
+        existingOrderInTransaction.paidAmount = roundCurrencyAmount(Math.min(Number(existingOrderInTransaction.paidAmount || 0), maxPaid));
       } else {
-        existingOrder.paidAmount = 0;
+        existingOrderInTransaction.paidAmount = 0;
       }
 
-      await manager.save(existingOrder);
+      await manager.save(existingOrderInTransaction);
 
       return manager.findOne(DeliveryOrder, {
-        where: { id: existingOrder.id },
+        where: { id: existingOrderInTransaction.id },
         relations: ['customer', 'items', 'items.product'],
       });
     });
@@ -301,19 +509,24 @@ export const updateDeliveryOrder = async (req: AuthRequest, res: Response) => {
     res.json({ message: '送货单已更新', order: updatedOrder });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
 export const deleteDeliveryOrder = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const order = await deliveryOrderRepository.findOne({ where: { id } });
+    const order = await deliveryOrderRepository.findOne({ where: { id }, relations: ['items'] });
     if (!order) {
       return res.status(404).json({ message: '送货单不存在' });
     }
 
     await AppDataSource.transaction(async (manager) => {
+      if (order.stockDeducted) {
+        for (const item of order.items || []) {
+          await adjustProductStock(manager, item.productId, Number(item.quantity));
+        }
+      }
       await manager.delete(DeliveryOrderItem, { deliveryOrderId: id });
       await manager.delete(DeliveryOrder, { id });
     });
@@ -321,6 +534,26 @@ export const deleteDeliveryOrder = async (req: AuthRequest, res: Response) => {
     res.json({ message: '送货单已删除' });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
+  }
+};
+
+// 图像识别送货单：返回结构化草稿供前端回填，用户二次编辑后再正式创建。
+export const recognizeDelivery = async (req: AuthRequest, res: Response) => {
+  try {
+    const { image } = req.body || {};
+    if (!image || typeof image !== 'string') {
+      throw new AppError('请提供送货单图片', 400);
+    }
+    // 仅接受 base64 的 data URL，禁止传入 http(s) 等地址，避免让视觉接口替我们去抓任意 URL（二阶 SSRF）。
+    if (!image.startsWith('data:image/')) {
+      throw new AppError('图片格式无效，请提供 base64 编码的图片（data:image/...）', 400);
+    }
+    const result = await recognizeDeliveryNote(image);
+    res.json(result);
+  } catch (error: any) {
+    if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: '识别失败，请稍后重试' });
   }
 };

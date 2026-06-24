@@ -1,8 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, FileText, Edit, Plus, CheckSquare, Square, Download, Trash2 } from 'lucide-react';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
+import FilterPanel, { ActiveFilter, DateShortcutGroup, FilterField } from '../components/FilterPanel';
 import Layout from '../components/Layout';
 import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
@@ -10,7 +11,8 @@ import ProductAutocomplete from '../components/ProductAutocomplete';
 import ActionableEmptyState from '../components/ActionableEmptyState';
 import QueryStateBanner from '../components/QueryStateBanner';
 import api from '../utils/api';
-import { formatAmount, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatUnitPrice } from '../utils/format';
+import { DateRangeShortcut, getDateRangeByShortcut } from '../utils/filtering';
 import {
   InventoryRecord,
   InventoryRecordStatus,
@@ -20,16 +22,27 @@ import {
   UserRole,
 } from '../types';
 import { getUserRole } from '../utils/auth';
-import { createPdfFileFromElement, downloadPdfFile, sharePdfFile, toSafePdfFileName } from '../utils/printShare';
+import { exportPrintable, getShareFallbackMessage, toSafePdfFileName } from '../utils/printShare';
+import QuickCreateProductForm, { QuickCreateProductDraft } from '../components/QuickCreateProductForm';
+
+type NewInventoryRecordDraft = {
+  productName: string;
+  productId: string;
+  quantity: string | number;
+  newProduct?: { name: string; specification: string; unit: string; costPrice: number };
+  costPriceOverride?: string | number;
+};
 
 const Inventory: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<InventoryRecord | null>(null);
-  const [newRecords, setNewRecords] = useState<{ productId: string; quantity: string | number }[]>([
-    { productId: '', quantity: '' }
+  const [newRecords, setNewRecords] = useState<NewInventoryRecordDraft[]>([
+    { productName: '', productId: '', quantity: '' }
   ]);
+  const [quickCreateIndex, setQuickCreateIndex] = useState<number | null>(null);
+  const [quickCreateName, setQuickCreateName] = useState('');
   const [editingRecord, setEditingRecord] = useState<{
     id: string;
     productId: string;
@@ -68,7 +81,7 @@ const Inventory: React.FC = () => {
 
   const openAddModal = () => {
     setSelectedSubmitterId(currentUser?.id || '');
-    setNewRecords([{ productId: '', quantity: '' }]);
+    setNewRecords([{ productName: '', productId: '', quantity: '' }]);
     setShowAddModal(true);
   };
 
@@ -76,7 +89,10 @@ const Inventory: React.FC = () => {
   const [filterProduct, setFilterProduct] = useState('');
   const [filterSpec, setFilterSpec] = useState('');
   const [filterSubmitter, setFilterSubmitter] = useState('');
-  const [filterDate, setFilterDate] = useState('');
+  const [filterDateRange, setFilterDateRange] = useState({
+    startDate: '',
+    endDate: '',
+  });
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
   const queryClient = useQueryClient();
@@ -95,24 +111,18 @@ const Inventory: React.FC = () => {
     },
   });
 
-  // 过滤记录
-  const filteredRecords = (inventoryRecords || []).filter((record: InventoryRecord) => {
-    // 模糊搜索产品名称
-    const matchProduct = filterProduct ? record.product?.name.toLowerCase().includes(filterProduct.toLowerCase()) : true;
-    // 精确筛选产品名称 (如果 filterProduct 是选择的)
-    // 但这里为了兼容输入和选择，保持模糊搜索，或者我们可以引入 Combobox
-    
-    // 规格筛选
-    const matchSpec = filterSpec ? record.product?.specification.toLowerCase().includes(filterSpec.toLowerCase()) : true;
+  // 过滤记录（用 useMemo 包裹，避免任意无关状态变更都重算；数据量大时尤为重要）
+  const filteredRecords = useMemo(() => ((inventoryRecords || []) as InventoryRecord[]).filter((record: InventoryRecord) => {
+    const matchProduct = filterProduct ? record.product?.name === filterProduct : true;
+    const matchSpec = filterSpec ? record.product?.specification === filterSpec : true;
     
     const submitterName = record.submitter?.name || '';
     const matchSubmitter = submitterName.toLowerCase().includes(filterSubmitter.toLowerCase());
     
-    let matchDate = true;
-    if (filterDate) {
-      const recordDate = new Date(record.createdAt).toISOString().split('T')[0];
-      matchDate = recordDate === filterDate;
-    }
+    const recordDate = new Date(record.createdAt).toISOString().split('T')[0];
+    const matchDate =
+      (filterDateRange.startDate ? recordDate >= filterDateRange.startDate : true) &&
+      (filterDateRange.endDate ? recordDate <= filterDateRange.endDate : true);
 
     let matchStatus = true;
     if (filterStatus !== 'all') {
@@ -120,7 +130,15 @@ const Inventory: React.FC = () => {
     }
 
     return matchProduct && matchSpec && matchSubmitter && matchDate && matchStatus;
-  });
+  }), [
+    inventoryRecords,
+    filterProduct,
+    filterSpec,
+    filterSubmitter,
+    filterDateRange.startDate,
+    filterDateRange.endDate,
+    filterStatus,
+  ]);
   const selectableFilteredRecords = filteredRecords.filter(
     (record: InventoryRecord) => record.status === InventoryRecordStatus.PENDING
   );
@@ -130,9 +148,9 @@ const Inventory: React.FC = () => {
 
   // 获取产品列表 (用于筛选)
   const { data: products } = useQuery({
-    queryKey: ['products'],
+    queryKey: ['products', 'finished'],
     queryFn: async () => {
-      const response = await api.get('/products');
+      const response = await api.get('/products?type=finished');
       return response.data;
     },
   });
@@ -146,13 +164,101 @@ const Inventory: React.FC = () => {
     enabled: isAdmin,
   });
   const activeAssignableUsers = (users || []).filter((user) => user.isActive);
+  const productList = (products || []) as Product[];
   const getProductById = (productId: string) =>
-    (products || []).find((product: Product) => product.id === productId);
+    productList.find((product) => product.id === productId);
+  const productNames = Array.from(new Set(productList.map((product) => product.name))).sort((left, right) =>
+    left.localeCompare(right, 'zh-CN'),
+  );
+  const submitterNames = Array.from(
+    new Set<string>(
+      (inventoryRecords || [])
+        .map((record: InventoryRecord) => record.submitter?.name)
+        .filter((name: string | undefined): name is string => Boolean(name)),
+    ),
+  ).sort((left, right) => left.localeCompare(right, 'zh-CN'));
+  const filterSpecOptions = Array.from(
+    new Set(
+      productList
+        .filter((product) => !filterProduct || product.name === filterProduct)
+        .map((product) => product.specification),
+    ),
+  ).sort((left, right) => left.localeCompare(right, 'zh-CN'));
+  const getStatusFilterText = (status: string) => {
+    switch (status) {
+      case InventoryRecordStatus.PENDING:
+        return '待审核';
+      case InventoryRecordStatus.APPROVED:
+        return '已通过';
+      case InventoryRecordStatus.REJECTED:
+        return '已拒绝';
+      default:
+        return '所有状态';
+    }
+  };
+
+  const clearFilters = () => {
+    setFilterProduct('');
+    setFilterSpec('');
+    setFilterSubmitter('');
+    setFilterDateRange({ startDate: '', endDate: '' });
+    setFilterStatus('all');
+  };
+
+  const handleDateShortcut = (shortcut: DateRangeShortcut) => {
+    setFilterDateRange(getDateRangeByShortcut(shortcut));
+  };
+
+  const activeFilters: ActiveFilter[] = [
+    filterDateRange.startDate || filterDateRange.endDate
+      ? {
+          key: 'date',
+          label: `日期: ${filterDateRange.startDate || '不限'} 至 ${filterDateRange.endDate || '不限'}`,
+          onRemove: () => setFilterDateRange({ startDate: '', endDate: '' }),
+        }
+      : null,
+    filterProduct
+      ? {
+          key: 'product',
+          label: `产品: ${filterProduct}`,
+          onRemove: () => {
+            setFilterProduct('');
+            setFilterSpec('');
+          },
+        }
+      : null,
+    filterSpec
+      ? {
+          key: 'spec',
+          label: `规格: ${filterSpec}`,
+          onRemove: () => setFilterSpec(''),
+        }
+      : null,
+    filterSubmitter
+      ? {
+          key: 'submitter',
+          label: `提交人: ${filterSubmitter}`,
+          onRemove: () => setFilterSubmitter(''),
+        }
+      : null,
+    filterStatus !== 'all'
+      ? {
+          key: 'status',
+          label: `状态: ${getStatusFilterText(filterStatus)}`,
+          onRemove: () => setFilterStatus('all'),
+        }
+      : null,
+  ].filter((item): item is ActiveFilter => Boolean(item));
 
   // 创建入库单
   const createInventoryMutation = useMutation({
     mutationFn: async (payload: {
-      records: { productId: string; quantity: number }[];
+      records: {
+        productId?: string;
+        quantity: number;
+        newProduct?: { name: string; specification: string; unit: string; costPrice: number };
+        costPriceOverride?: number;
+      }[];
       submittedBy?: string;
       submissionMode: InventoryRecordSubmissionMode;
     }) => {
@@ -161,8 +267,11 @@ const Inventory: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inventoryRecords'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['salaryReport'] });
       setShowAddModal(false);
-      setNewRecords([{ productId: '', quantity: '' }]);
+      setNewRecords([{ productName: '', productId: '', quantity: '' }]);
       setSelectedSubmitterId(currentUser?.id || '');
     },
     onError: (error: any) => {
@@ -188,6 +297,9 @@ const Inventory: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inventoryRecords'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['salaryReport'] });
       setShowEditModal(false);
       setEditingRecord({
         id: '',
@@ -218,6 +330,9 @@ const Inventory: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inventoryRecords'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['salaryReport'] });
       setShowReviewModal(false);
       setSelectedRecord(null);
       setReviewData({
@@ -243,6 +358,9 @@ const Inventory: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inventoryRecords'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['salaryReport'] });
     },
     onError: (error: any) => {
       const message =
@@ -266,6 +384,9 @@ const Inventory: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inventoryRecords'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['salaryReport'] });
       setSelectedRecordIds(new Set());
       setIsBatchProcessing(false);
     },
@@ -287,8 +408,31 @@ const Inventory: React.FC = () => {
     }
 
     const validRecords = newRecords
-      .map(r => ({ ...r, quantity: Number(r.quantity) }))
-      .filter(r => r.productId && r.quantity > 0);
+      .map((r) => ({ ...r, quantity: Number(r.quantity) }))
+      .filter((r) => (r.productId || r.newProduct) && r.quantity > 0)
+      .map((r) => {
+        const base: {
+          productId?: string;
+          quantity: number;
+          newProduct?: { name: string; specification: string; unit: string; costPrice: number };
+          costPriceOverride?: number;
+        } = { quantity: r.quantity };
+        if (r.newProduct) {
+          base.newProduct = r.newProduct;
+        } else {
+          base.productId = r.productId;
+          const selected = getProductById(r.productId);
+          if (
+            selected &&
+            Number(selected.costPrice) === 0 &&
+            r.costPriceOverride !== undefined &&
+            r.costPriceOverride !== ''
+          ) {
+            base.costPriceOverride = Number(r.costPriceOverride);
+          }
+        }
+        return base;
+      });
 
     if (validRecords.length === 0) {
       alert('请至少选择一个产品并填写数量');
@@ -314,14 +458,68 @@ const Inventory: React.FC = () => {
     }
   };
 
-  const handleUpdateRecord = (index: number, field: 'productId' | 'quantity', value: any) => {
+  const handleUpdateRecord = (
+    index: number,
+    field: 'productName' | 'productId' | 'quantity' | 'costPriceOverride',
+    value: any,
+  ) => {
     const updated = [...newRecords];
-    updated[index] = { ...updated[index], [field]: value };
+    if (field === 'productName') {
+      updated[index] = { ...updated[index], productName: value, productId: '', costPriceOverride: undefined };
+    } else if (field === 'productId') {
+      const selectedProduct = getProductById(value);
+      updated[index] = {
+        ...updated[index],
+        productId: value,
+        productName: selectedProduct?.name || updated[index].productName,
+        costPriceOverride: undefined,
+      };
+    } else {
+      updated[index] = { ...updated[index], [field]: value };
+    }
     setNewRecords(updated);
   };
 
+  const openQuickCreate = (index: number, name: string) => {
+    setQuickCreateIndex(index);
+    setQuickCreateName(name);
+  };
+
+  const confirmQuickCreate = (draft: QuickCreateProductDraft) => {
+    if (quickCreateIndex === null) return;
+    const index = quickCreateIndex;
+    setNewRecords((current) => {
+      const updated = [...current];
+      if (!updated[index]) return current;
+      updated[index] = {
+        ...updated[index],
+        productId: '',
+        productName: `${draft.name} - ${draft.specification}`,
+        costPriceOverride: undefined,
+        newProduct: {
+          name: draft.name,
+          specification: draft.specification,
+          unit: draft.unit,
+          costPrice: draft.price,
+        },
+      };
+      return updated;
+    });
+    setQuickCreateIndex(null);
+    setQuickCreateName('');
+  };
+
+  const clearNewProduct = (index: number) => {
+    setNewRecords((current) => {
+      const updated = [...current];
+      if (!updated[index]) return current;
+      updated[index] = { productName: '', productId: '', quantity: updated[index].quantity };
+      return updated;
+    });
+  };
+
   const handleAddRow = () => {
-    setNewRecords([...newRecords, { productId: '', quantity: '' }]);
+    setNewRecords([...newRecords, { productName: '', productId: '', quantity: '' }]);
   };
 
   const handleRemoveRow = (index: number) => {
@@ -435,31 +633,26 @@ const Inventory: React.FC = () => {
     const filename = toSafePdfFileName(`入库单导出_${exportDate}`);
 
     try {
-      const file = await createPdfFileFromElement(inventoryExportRef.current, {
-        filename,
-        orientation: 'landscape',
-        marginMm: 12,
-      });
+      const result = await exportPrintable(
+        inventoryExportRef.current,
+        {
+          filename,
+          orientation: 'landscape',
+          marginMm: 12,
+          title: filename.replace(/\.pdf$/i, ''),
+          text: '入库单导出',
+        },
+        action,
+      );
 
-      if (action === 'save') {
-        downloadPdfFile(file);
-        setIsExportDialogOpen(false);
-        return;
-      }
-
-      const result = await sharePdfFile(file, {
-        title: filename.replace(/\.pdf$/i, ''),
-        text: '入库单导出',
-      });
-
-      if (result === 'downloaded') {
-        window.alert('当前浏览器无法直接分享到微信，已保存 PDF，可发送到微信。');
+      if (result === 'fallback-download') {
+        window.alert(getShareFallbackMessage());
       }
       if (result !== 'cancelled') {
         setIsExportDialogOpen(false);
       }
     } catch {
-      window.alert('PDF 生成失败，请稍后重试。');
+      window.alert('导出失败，请稍后重试。');
     } finally {
       setIsExportingPdf(false);
     }
@@ -495,6 +688,8 @@ const Inventory: React.FC = () => {
     switch (mode) {
       case InventoryRecordSubmissionMode.ADMIN_ASSIGN:
         return '管理员分配';
+      case InventoryRecordSubmissionMode.RETURN_DEDUCTION:
+        return '退货扣款';
       case InventoryRecordSubmissionMode.EMPLOYEE_SUBMIT:
       default:
         return '员工提交';
@@ -502,6 +697,9 @@ const Inventory: React.FC = () => {
   };
 
   const getSubmissionModeBadgeClass = (mode?: InventoryRecordSubmissionMode) => {
+    if (mode === InventoryRecordSubmissionMode.RETURN_DEDUCTION) {
+      return 'bg-rose-100 text-rose-700';
+    }
     return mode === InventoryRecordSubmissionMode.ADMIN_ASSIGN
       ? 'bg-blue-100 text-blue-800'
       : 'bg-slate-100 text-slate-700';
@@ -523,7 +721,7 @@ const Inventory: React.FC = () => {
         }
       `}</style>
       
-      <div className="p-4 md:p-8">
+      <div className="px-4 pb-4 pt-0 md:px-6 md:pb-6">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -531,110 +729,110 @@ const Inventory: React.FC = () => {
           errorText="入库记录暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-          {/* 筛选区域 */}
-          <div className="grid grid-cols-1 gap-3 border-b border-gray-200 bg-gray-50 p-4 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">日期</label>
-              <DateField
-                value={filterDate}
-                onChange={setFilterDate}
-                className="w-full lg:w-40"
-              />
-            </div>
+        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+          <FilterPanel
+            totalCount={(inventoryRecords || []).length}
+            filteredCount={filteredRecords.length}
+            activeFilters={activeFilters}
+            onClear={clearFilters}
+            primary={
+              <>
+                <FilterField label="开始日期" className="lg:w-40">
+                  <DateField
+                    value={filterDateRange.startDate}
+                    onChange={(value) => setFilterDateRange({ ...filterDateRange, startDate: value })}
+                    className="w-full"
+                  />
+                </FilterField>
+                <FilterField label="结束日期" className="lg:w-40">
+                  <DateField
+                    value={filterDateRange.endDate}
+                    onChange={(value) => setFilterDateRange({ ...filterDateRange, endDate: value })}
+                    className="w-full"
+                  />
+                </FilterField>
+                <FilterField label="快捷日期" className="sm:col-span-2 lg:w-72">
+                  <DateShortcutGroup onSelect={handleDateShortcut} />
+                </FilterField>
+              </>
+            }
+            advanced={
+              <>
+                <FilterField label="产品名称" className="lg:w-40">
+                  <select
+                    value={filterProduct}
+                    onChange={(e) => {
+                      setFilterProduct(e.target.value);
+                      setFilterSpec('');
+                    }}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="">所有产品</option>
+                    {productNames.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </FilterField>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">产品名称</label>
-              <select
-                value={filterProduct}
-                onChange={(e) => setFilterProduct(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
-              >
-                <option value="">所有产品</option>
-                {Array.from(new Set((products || []).map((p: Product) => p.name))).map((name) => (
-                  <option key={name as string} value={name as string}>
-                    {name as string}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <FilterField label="规格" className="lg:w-40">
+                  <select
+                    value={filterSpec}
+                    onChange={(e) => setFilterSpec(e.target.value)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="">所有规格</option>
+                    {filterSpecOptions.map((specification) => (
+                      <option key={specification} value={specification}>
+                        {specification}
+                      </option>
+                    ))}
+                  </select>
+                </FilterField>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">规格</label>
-              <select
-                value={filterSpec}
-                onChange={(e) => setFilterSpec(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
-              >
-                <option value="">所有规格</option>
-                {products
-                  ?.filter((p: Product) => !filterProduct || p.name === filterProduct)
-                  .map((p: Product) => (
-                    <option key={p.id} value={p.specification}>
-                      {p.specification}
-                    </option>
-                  ))}
-              </select>
-            </div>
+                {userRole !== UserRole.PIECE_RATE && (
+                  <FilterField label="提交人" className="lg:w-40">
+                    <select
+                      value={filterSubmitter}
+                      onChange={(e) => setFilterSubmitter(e.target.value)}
+                      className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                    >
+                      <option value="">所有提交人</option>
+                      {submitterNames.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </FilterField>
+                )}
 
-            {userRole !== UserRole.PIECE_RATE && (
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-gray-500">提交人</label>
-                <select
-                  value={filterSubmitter}
-                  onChange={(e) => setFilterSubmitter(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
-                >
-                  <option value="">所有提交人</option>
-                  {Array.from(new Set((inventoryRecords || []).map((r: InventoryRecord) => r.submitter?.name).filter((n: string | undefined): n is string => !!n))).map((name) => (
-                    <option key={name as string} value={name as string}>
-                      {name as string}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">状态</label>
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 lg:w-40"
-              >
-                <option value="all">所有状态</option>
-                <option value={InventoryRecordStatus.PENDING}>待审核</option>
-                <option value={InventoryRecordStatus.APPROVED}>已通过</option>
-                <option value={InventoryRecordStatus.REJECTED}>已拒绝</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-2 pb-0.5 sm:col-span-2 sm:flex-row lg:col-span-1 lg:ml-auto">
-              {(filterProduct || filterSpec || filterSubmitter || filterDate || filterStatus !== 'all') && (
-                <button
-                  onClick={() => {
-                    setFilterProduct('');
-                    setFilterSpec('');
-                    setFilterSubmitter('');
-                    setFilterDate('');
-                    setFilterStatus('all');
-                  }}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-blue-600 hover:text-blue-800"
-                >
-                  清除筛选
-                </button>
-              )}
-              
+                <FilterField label="状态" className="lg:w-40">
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="all">所有状态</option>
+                    <option value={InventoryRecordStatus.PENDING}>待审核</option>
+                    <option value={InventoryRecordStatus.APPROVED}>已通过</option>
+                    <option value={InventoryRecordStatus.REJECTED}>已拒绝</option>
+                  </select>
+                </FilterField>
+              </>
+            }
+            actions={
               <button
                 onClick={handleExport}
                 disabled={filteredRecords.length === 0}
                 className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="mr-2 h-4 w-4" />
                 导出
               </button>
-            </div>
-          </div>
+            }
+          />
 
           {/* 批量操作栏 */}
           {selectedRecordIds.size > 0 && getUserRole() !== UserRole.PIECE_RATE && (
@@ -671,11 +869,7 @@ const Inventory: React.FC = () => {
                 actionLabel={(inventoryRecords || []).length ? '清除筛选' : isAdmin ? '新增入库单' : '提交入库单'}
                 onAction={() => {
                   if ((inventoryRecords || []).length) {
-                    setFilterProduct('');
-                    setFilterSpec('');
-                    setFilterSubmitter('');
-                    setFilterDate('');
-                    setFilterStatus('all');
+                    clearFilters();
                     return;
                   }
                   openAddModal();
@@ -714,6 +908,7 @@ const Inventory: React.FC = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">提交人</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">来源</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">备注</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
               </thead>
@@ -759,7 +954,7 @@ const Inventory: React.FC = () => {
                       ¥{formatUnitPrice(record.unitPrice)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900">
-                      ¥{formatAmount(record.totalAmount)}
+                      ¥{formatAmountDetail(record.totalAmount)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {record.submitter?.name}
@@ -773,6 +968,11 @@ const Inventory: React.FC = () => {
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadgeClass(record.status)}`}>
                         {getStatusText(record.status)}
                       </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      <div className="max-w-[180px] truncate" title={record.remark || ''}>
+                        {record.remark || '-'}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       {record.status === InventoryRecordStatus.PENDING && (
@@ -847,7 +1047,7 @@ const Inventory: React.FC = () => {
 
                 <MobileFieldGrid>
                   <MobileField label="数量" value={`${record.quantity} ${record.product?.unit || ''}`} />
-                  <MobileField label="总金额" value={`¥${formatAmount(record.totalAmount)}`} align="right" />
+                  <MobileField label="总金额" value={`¥${formatAmountDetail(record.totalAmount)}`} align="right" />
                   <MobileField label="单价" value={`¥${formatUnitPrice(record.unitPrice)}`} />
                   <MobileField label="提交人" value={record.submitter?.name || '-'} align="right" />
                   <MobileField
@@ -868,6 +1068,13 @@ const Inventory: React.FC = () => {
                     }
                   />
                 </MobileFieldGrid>
+
+                {record.remark && (
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <div className="text-xs text-gray-500">备注</div>
+                    <div className="mt-1 break-words text-sm text-gray-900">{record.remark}</div>
+                  </div>
+                )}
 
                 <MobileActionBar>
                   {record.status === InventoryRecordStatus.PENDING && (
@@ -918,7 +1125,7 @@ const Inventory: React.FC = () => {
       {isExportDialogOpen && (
         <ExportActionDialog
           title="导出入库单"
-          description={`当前筛选共 ${filteredRecords.length} 条记录，可保存 PDF 或在手机端分享到微信。`}
+          description={`当前筛选共 ${filteredRecords.length} 条记录，可保存 PDF，或打开系统分享面板后选择微信。`}
           isProcessing={isExportingPdf}
           onSave={() => handleInventoryPdfExport('save')}
           onShare={() => handleInventoryPdfExport('share')}
@@ -935,7 +1142,7 @@ const Inventory: React.FC = () => {
                   <p className="text-[11px] uppercase tracking-[0.3em] text-gray-500">Kinko Inventory Report</p>
                   <h2 className="mt-2 text-[22px] font-semibold text-gray-900">入库单导出</h2>
                   <p className="mt-2 text-[12px] text-gray-700">
-                    筛选：日期 {filterDate || '全部'} / 产品 {filterProduct || '全部'} / 规格 {filterSpec || '全部'} / 提交人 {filterSubmitter || '全部'} / 状态 {filterStatus === 'all' ? '全部' : getStatusText(filterStatus as InventoryRecordStatus)}
+                    筛选：日期 {filterDateRange.startDate || '不限'} 至 {filterDateRange.endDate || '不限'} / 产品 {filterProduct || '全部'} / 规格 {filterSpec || '全部'} / 提交人 {filterSubmitter || '全部'} / 状态 {filterStatus === 'all' ? '全部' : getStatusText(filterStatus as InventoryRecordStatus)}
                   </p>
                 </div>
                 <div className="text-right text-[12px] text-gray-700">
@@ -973,7 +1180,7 @@ const Inventory: React.FC = () => {
                       <td className="border border-gray-900 px-2 py-3 text-right text-sm text-gray-900">{record.quantity}</td>
                       <td className="border border-gray-900 px-2 py-3 text-center text-sm text-gray-700">{record.product?.unit || '-'}</td>
                       <td className="border border-gray-900 px-2 py-3 text-right text-sm text-gray-900">{formatUnitPrice(record.unitPrice)}</td>
-                      <td className="border border-gray-900 px-2 py-3 text-right text-sm font-medium text-gray-900">¥{formatAmount(record.totalAmount)}</td>
+                      <td className="border border-gray-900 px-2 py-3 text-right text-sm font-medium text-gray-900">¥{formatAmountDetail(record.totalAmount)}</td>
                       <td className="border border-gray-900 px-2 py-3 text-sm text-gray-900">{record.submitter?.name || '-'}</td>
                       <td className="border border-gray-900 px-2 py-3 text-sm text-gray-700">{getSubmissionModeText(record.submissionMode)}</td>
                       <td className="border border-gray-900 px-2 py-3 text-sm text-gray-700">{getStatusText(record.status)}</td>
@@ -1035,22 +1242,43 @@ const Inventory: React.FC = () => {
               )}
               {newRecords.map((record, index) => {
                 const selectedProduct = getProductById(record.productId);
+                const isNewProduct = Boolean(record.newProduct);
+                const unitLabel = isNewProduct ? record.newProduct?.unit : selectedProduct?.unit;
+                const canEditCost = !isNewProduct && Boolean(selectedProduct) && Number(selectedProduct?.costPrice ?? 0) === 0;
 
                 return (
                   <div key={index} className="grid grid-cols-1 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100 relative group sm:grid-cols-[minmax(0,1fr)_6rem_7rem] sm:items-start">
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">产品 {index + 1}</label>
-                      <ProductAutocomplete
-                        products={products}
-                        value={record.productId}
-                        onSelect={(productId) => handleUpdateRecord(index, 'productId', productId)}
-                        placeholder="输入产品名称或规格"
-                        className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                      />
+                      {isNewProduct ? (
+                        <div className="flex min-h-[42px] items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+                          <span className="truncate text-blue-700">
+                            新建：{record.newProduct?.name} - {record.newProduct?.specification}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => clearNewProduct(index)}
+                            className="ml-2 shrink-0 text-blue-500 transition-colors hover:text-blue-700"
+                            title="重新选择产品"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <ProductAutocomplete
+                          products={products}
+                          value={record.productId}
+                          onSelect={(productId) => handleUpdateRecord(index, 'productId', productId)}
+                          allowCreate
+                          onCreateNew={(name) => openQuickCreate(index, name)}
+                          placeholder="输入产品名称或规格"
+                          className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                        />
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">
-                        数量 {selectedProduct?.unit ? `(${selectedProduct.unit})` : ''}
+                        数量 {unitLabel ? `(${unitLabel})` : ''}
                       </label>
                       <input
                         type="number"
@@ -1063,9 +1291,25 @@ const Inventory: React.FC = () => {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">入库单价</label>
-                      <div className="block w-full px-3 py-2 border border-gray-200 rounded-md bg-white text-right text-sm text-gray-900 shadow-sm">
-                        {selectedProduct ? `¥${formatUnitPrice(selectedProduct.costPrice)}` : '-'}
-                      </div>
+                      {isNewProduct ? (
+                        <div className="block w-full px-3 py-2 border border-gray-200 rounded-md bg-white text-right text-sm text-gray-900 shadow-sm">
+                          ¥{formatUnitPrice(record.newProduct?.costPrice ?? 0)}
+                        </div>
+                      ) : canEditCost ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.0001"
+                          value={record.costPriceOverride ?? ''}
+                          placeholder="补填单价"
+                          onChange={(e) => handleUpdateRecord(index, 'costPriceOverride', e.target.value)}
+                          className="block w-full px-3 py-2 border border-gray-300 rounded-md text-right shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                        />
+                      ) : (
+                        <div className="block w-full px-3 py-2 border border-gray-200 rounded-md bg-white text-right text-sm text-gray-900 shadow-sm">
+                          {selectedProduct ? `¥${formatUnitPrice(selectedProduct.costPrice)}` : '-'}
+                        </div>
+                      )}
                     </div>
                     {newRecords.length > 1 && (
                       <button
@@ -1105,6 +1349,18 @@ const Inventory: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {quickCreateIndex !== null && (
+        <QuickCreateProductForm
+          initialName={quickCreateName}
+          priceLabel="入库单价"
+          onCancel={() => {
+            setQuickCreateIndex(null);
+            setQuickCreateName('');
+          }}
+          onConfirm={confirmQuickCreate}
+        />
       )}
 
       {errorModalMessage && (

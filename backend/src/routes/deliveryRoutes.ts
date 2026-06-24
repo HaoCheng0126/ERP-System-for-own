@@ -6,11 +6,13 @@ import {
   updateDeliveryOrderStatus,
   updateDeliveryOrder,
   deleteDeliveryOrder,
+  recognizeDelivery,
 } from '../controllers/deliveryController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
 
+router.post('/recognize', authenticate, requireAdmin, recognizeDelivery);
 router.get('/', authenticate, requireAdmin, getDeliveryOrders);
 router.get('/:id', authenticate, requireAdmin, getDeliveryOrderById);
 router.post('/', authenticate, requireAdmin, createDeliveryOrder);

@@ -9,6 +9,7 @@ import Salary from './pages/Salary';
 import Settings from './pages/Settings';
 import Delivery from './pages/Delivery';
 import Purchase from './pages/Purchase';
+import Returns from './pages/Returns';
 import Statement from './pages/Statement';
 import EmployeeDashboard from './pages/EmployeeDashboard';
 import EmployeeSystem from './pages/EmployeeSystem';
@@ -82,6 +83,7 @@ function App() {
         <Route path="/customers" element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]}><Customers /></ProtectedRoute>} />
         <Route path="/delivery" element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]}><Delivery /></ProtectedRoute>} />
         <Route path="/purchase" element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]}><Purchase /></ProtectedRoute>} />
+        <Route path="/returns" element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]}><Returns /></ProtectedRoute>} />
         <Route path="/statements" element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]}><Statement /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute allowedRoles={[UserRole.ADMIN]}><Settings /></ProtectedRoute>} />
         

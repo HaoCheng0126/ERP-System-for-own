@@ -12,6 +12,10 @@ import { Statement } from '../entities/Statement';
 import { PurchaseOrder } from '../entities/PurchaseOrder';
 import { PaymentRecord } from '../entities/PaymentRecord';
 import { SetupState } from '../entities/SetupState';
+import { StockAdjustment } from '../entities/StockAdjustment';
+import { ReturnOrder } from '../entities/ReturnOrder';
+import { ReturnOrderItem } from '../entities/ReturnOrderItem';
+import { SystemSetting } from '../entities/SystemSetting';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -35,6 +39,10 @@ export const AppDataSource = new DataSource({
     PurchaseOrder,
     PaymentRecord,
     SetupState,
+    StockAdjustment,
+    ReturnOrder,
+    ReturnOrderItem,
+    SystemSetting,
   ],
   migrations: [__dirname + '/../migrations/*.{ts,js}'],
   subscribers: [],

@@ -32,11 +32,17 @@ export interface Company {
 }
 
 // 产品类型
+export enum ProductType {
+  FINISHED = 'finished',
+  RAW_MATERIAL = 'raw_material',
+}
+
 export interface Product {
   id: string;
   name: string;
   specification: string;
   unit: string;
+  type: ProductType;
   costPrice: number;
   basePrice?: number;
   stock?: number;
@@ -71,6 +77,7 @@ export interface Customer {
   address?: string;
   contactPerson?: string;
   phone?: string;
+  initialBalance?: number;
   group?: string;
   type: CustomerType;
   isActive: boolean;
@@ -88,6 +95,7 @@ export enum InventoryRecordStatus {
 export enum InventoryRecordSubmissionMode {
   EMPLOYEE_SUBMIT = 'employee_submit',
   ADMIN_ASSIGN = 'admin_assign',
+  RETURN_DEDUCTION = 'return_deduction',
 }
 
 // 入库单类型
@@ -137,6 +145,7 @@ export interface DeliveryOrder {
   deliveryDate: string;
   totalAmount: number;
   paidAmount?: number;
+  stockDeducted?: boolean;
   status: DeliveryOrderStatus;
   remark?: string;
   customer?: Customer;
@@ -228,6 +237,7 @@ export interface PurchaseOrder {
   id: string;
   purchaseDate: string;
   supplierId?: string | null;
+  productId?: string | null;
   item: string;
   supplier: string;
   unit: string;
@@ -235,9 +245,108 @@ export interface PurchaseOrder {
   unitPrice: number;
   amount: number;
   paidAmount?: number;
+  stockApplied?: boolean;
   status?: PurchaseOrderStatus;
   remark?: string;
   supplierEntity?: Customer | null;
+  product?: Product | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// 客户退货单
+export interface ReturnOrderItem {
+  id: string;
+  returnOrderId: string;
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  restock: boolean;
+  deductEmployeeId?: string | null;
+  deductQuantity: number;
+  deductInventoryRecordId?: string | null;
+  product?: Product;
+}
+
+export interface ReturnOrder {
+  id: string;
+  returnNumber: string;
+  customerId: string;
+  deliveryOrderId?: string | null;
+  returnDate: string;
+  totalAmount: number;
+  remark?: string | null;
+  customer?: Customer;
+  deliveryOrder?: DeliveryOrder | null;
+  items: ReturnOrderItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StatementBusinessMode = 'delivery' | 'purchase';
+
+export interface ReconciliationGroup {
+  customer: Customer;
+  mode: StatementBusinessMode;
+  orders: DeliveryOrder[];
+  purchases: PurchaseOrder[];
+  payments: PaymentRecord[];
+  returns?: ReturnOrder[];
+  totalBusiness: number;
+  totalPayment: number;
+  endingBalance: number;
+  periodBusiness: number;
+  periodPayment: number;
+}
+
+export interface DashboardFinancialStats {
+  salesAmount: number;
+  receivedAmount: number;
+  receivableBalance: number;
+  purchaseAmount: number;
+  paidAmount: number;
+  payableBalance: number;
+}
+
+export interface CounterpartyStat {
+  id: string;
+  name: string;
+  type: CustomerType;
+  totalBusiness: number;
+  totalPayment: number;
+  endingBalance: number;
+  statusLabel: string;
+}
+
+export interface DashboardCounterpartyStats {
+  clients: CounterpartyStat[];
+  suppliers: CounterpartyStat[];
+}
+
+export interface DashboardTrendPoint {
+  month: string;
+  label: string;
+  sales: number;
+  purchase: number;
+}
+
+export interface DashboardRecentRecord {
+  id: string;
+  recordNumber: string;
+  submitterName: string;
+  productName: string;
+  quantity: number;
+  status: string;
+  createdAt: string;
+}
+
+export interface DashboardAdminStats {
+  todayInventoryCount: number;
+  todayGrowthRate: number;
+  pendingReviewCount: number;
+  currentMonthOutputValue: number;
+  monthGrowthRate: number;
+  activeCustomerCount: number;
+  recentRecords: DashboardRecentRecord[];
 }

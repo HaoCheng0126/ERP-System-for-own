@@ -6,6 +6,7 @@ export { PrimaryGeneratedColumn } from 'typeorm/decorator/columns/PrimaryGenerat
 export { UpdateDateColumn } from 'typeorm/decorator/columns/UpdateDateColumn';
 export { Unique } from 'typeorm/decorator/Unique';
 export { Entity } from 'typeorm/decorator/entity/Entity';
+export { Index } from 'typeorm/decorator/Index';
 export { JoinColumn } from 'typeorm/decorator/relations/JoinColumn';
 export { ManyToOne } from 'typeorm/decorator/relations/ManyToOne';
 export { OneToMany } from 'typeorm/decorator/relations/OneToMany';

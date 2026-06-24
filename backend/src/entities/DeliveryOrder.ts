@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, OneToMany } from '../lib/typeorm';
+import { Entity, Index, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, OneToMany } from '../lib/typeorm';
 import { Customer } from './Customer';
 import { DeliveryOrderItem } from './DeliveryOrderItem';
 import { ColumnNumericTransformer } from '../utils/transformers';
@@ -10,6 +10,8 @@ export enum DeliveryOrderStatus {
 }
 
 @Entity('delivery_orders')
+@Index(['customerId', 'deliveryDate'])
+@Index(['status'])
 export class DeliveryOrder {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -35,6 +37,9 @@ export class DeliveryOrder {
 
   @Column('decimal', { precision: 12, scale: 2, default: 0, transformer: new ColumnNumericTransformer() })
   paidAmount: number;
+
+  @Column({ default: false })
+  stockDeducted: boolean;
 
   @Column({ type: 'text', nullable: true })
   remark: string;

@@ -26,6 +26,14 @@ export class Customer {
   @Column({ nullable: true })
   phone: string;
 
+  @Column('decimal', {
+    precision: 12,
+    scale: 2,
+    default: 0,
+    transformer: new ColumnNumericTransformer(),
+  })
+  initialBalance: number;
+
   @Column({ nullable: true })
   group: string;
 

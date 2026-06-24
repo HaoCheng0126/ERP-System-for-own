@@ -86,7 +86,7 @@ export const getSetupStatus = async (_req: AuthRequest, res: Response) => {
   try {
     res.json(await buildSetupStatus());
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -105,6 +105,6 @@ export const completeSetup = async (req: AuthRequest, res: Response) => {
 
     res.json({ message: '首次建账已完成', setup: state });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

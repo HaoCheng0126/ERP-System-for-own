@@ -25,7 +25,7 @@ export const getCompany = async (req: AuthRequest, res: Response) => {
 
     res.json(company);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -46,6 +46,6 @@ export const updateCompany = async (req: AuthRequest, res: Response) => {
     await companyRepository.save(company);
     res.json({ message: '公司资料更新成功', company });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

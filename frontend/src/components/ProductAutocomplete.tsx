@@ -8,6 +8,8 @@ interface ProductAutocompleteProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  allowCreate?: boolean;
+  onCreateNew?: (name: string) => void;
 }
 
 const getProductLabel = (product: Product) => `${product.name} - ${product.specification}`;
@@ -54,6 +56,8 @@ const ProductAutocomplete: React.FC<ProductAutocompleteProps> = ({
   placeholder = '输入产品名称或规格',
   className = '',
   disabled = false,
+  allowCreate = false,
+  onCreateNew,
 }) => {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const selectedProduct = products.find((product) => product.id === value);
@@ -100,6 +104,9 @@ const ProductAutocomplete: React.FC<ProductAutocompleteProps> = ({
     }
   };
 
+  const trimmedKeyword = keyword.trim();
+  const canCreate = allowCreate && Boolean(trimmedKeyword) && !findExactProduct(products, trimmedKeyword);
+
   return (
     <div ref={wrapperRef} className="relative">
       <input
@@ -131,7 +138,19 @@ const ProductAutocomplete: React.FC<ProductAutocompleteProps> = ({
               </button>
             ))
           ) : (
-            <div className="px-3 py-2 text-sm text-gray-500">没有匹配的产品</div>
+            !canCreate && <div className="px-3 py-2 text-sm text-gray-500">没有匹配的产品</div>
+          )}
+          {canCreate && (
+            <button
+              type="button"
+              onClick={() => {
+                onCreateNew?.(trimmedKeyword);
+                setIsOpen(false);
+              }}
+              className="block w-full border-t border-gray-100 px-3 py-2 text-left text-sm font-medium text-blue-600 hover:bg-blue-50"
+            >
+              + 新建产品「{trimmedKeyword}」
+            </button>
           )}
         </div>
       )}
