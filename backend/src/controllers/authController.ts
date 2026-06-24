@@ -39,7 +39,7 @@ const ensureUniqueUsername = async (baseUsername: string, userId: string) => {
 const createAuthPayload = (user: User) => {
   const token = jwt.sign(
     { id: user.id, username: user.username, role: user.role },
-    process.env.JWT_SECRET || 'secret',
+    process.env.JWT_SECRET as string,
     { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as jwt.SignOptions['expiresIn'] }
   );
 
@@ -89,7 +89,7 @@ export const register = async (req: AuthRequest, res: Response) => {
 
     res.status(201).json({ message: '用户创建成功', userId: user.id });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -123,7 +123,7 @@ export const login = async (req: AuthRequest, res: Response) => {
 
     res.json(createAuthPayload(user));
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -142,7 +142,7 @@ export const redirectToFeishuAuthorize = async (req: AuthRequest, res: Response)
     if (error instanceof FeishuAuthError) {
       return res.status(error.status).json({ message: error.message });
     }
-    return res.status(500).json({ message: '飞书登录初始化失败', error });
+    return res.status(500).json({ message: '飞书登录初始化失败' });
   }
 };
 
@@ -184,7 +184,7 @@ export const loginWithFeishu = async (req: AuthRequest, res: Response) => {
       return res.status(status).json({ message: error.message });
     }
 
-    return res.status(500).json({ message: '飞书登录失败', error });
+    return res.status(500).json({ message: '飞书登录失败' });
   }
 };
 
@@ -206,9 +206,11 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
       name: user.name,
       role: user.role,
       phone: user.phone,
+      isActive: user.isActive,
+      createdAt: user.createdAt,
     });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -241,7 +243,7 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
 
     res.json({ message: '密码修改成功' });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -283,6 +285,6 @@ export const updateProfile = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

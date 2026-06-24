@@ -10,3 +10,7 @@ export * from './Statement';
 export * from './PurchaseOrder';
 export * from './PaymentRecord';
 export * from './SetupState';
+export * from './StockAdjustment';
+export * from './ReturnOrder';
+export * from './ReturnOrderItem';
+export * from './SystemSetting';

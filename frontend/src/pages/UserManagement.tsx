@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Edit2, Eye, EyeOff, Plus, RotateCcw, Trash2, X } from 'lucide-react';
-import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import api from '../utils/api';
 import { User, UserRole } from '../types';
 
@@ -231,17 +230,22 @@ const UserManagement: React.FC = () => {
     });
   };
 
+  const filteredUsers = users || [];
+
   if (isLoading) return <div className="p-4">加载中...</div>;
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-        <h3 className="text-lg font-medium text-gray-900">用户管理</h3>
+    <div className="-mx-4 overflow-hidden bg-white md:-mx-6">
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold text-ink">用户列表</h3>
+          <p className="mt-0.5 text-xs text-ink-tertiary">共 {filteredUsers.length} 个员工账号 · 管理姓名、角色、密码与状态</p>
+        </div>
         <button
           onClick={() => handleOpenModal()}
-          className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 sm:w-auto"
+          className="inline-flex min-h-11 w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-700 sm:w-auto"
         >
-          <Plus className="w-4 h-4 mr-2" />
+          <Plus className="h-4 w-4" />
           添加用户
         </button>
       </div>
@@ -261,209 +265,123 @@ const UserManagement: React.FC = () => {
         </div>
       )}
 
-      <div className="hidden overflow-x-auto md:block">
-        <table className="min-w-[900px] w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">员工编号</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">姓名</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">员工账号</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">密码</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">角色</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">电话</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {users?.map((user) => {
-              const isCurrentUser = user.id === currentUserId;
-              const isDeletingThisUser = deleteUserMutation.isPending && deleteUserMutation.variables?.userId === user.id;
-
-              return (
-                <tr key={user.id}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{user.code || '-'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.name}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.username}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <div className="flex items-center gap-2">
-                      <span>
-                        {user.passwordStatus === 'default'
-                          ? `默认(${visibleDefaultPasswordIds.has(user.id) ? '123456' : '••••••'})`
-                          : '已修改'}
-                      </span>
-                      {user.passwordStatus === 'default' ? (
-                        <button
-                          type="button"
-                          onClick={() => toggleDefaultPasswordVisibility(user.id)}
-                          className="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-                          title={visibleDefaultPasswordIds.has(user.id) ? '隐藏默认密码' : '查看默认密码'}
-                          aria-label={visibleDefaultPasswordIds.has(user.id) ? '隐藏默认密码' : '查看默认密码'}
-                        >
-                          {visibleDefaultPasswordIds.has(user.id) ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled
-                          className="cursor-not-allowed rounded p-1 text-gray-300"
-                          title="密码已加密，无法查看；可以使用右侧按钮设置新密码"
-                          aria-label="已修改密码无法查看"
-                        >
-                          <EyeOff className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.role === UserRole.ADMIN ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'
-                    }`}>
-                      {user.role === UserRole.ADMIN ? '管理员' : '计件工人'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.phone || '-'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                    }`}>
-                      {user.isActive ? '正常' : '禁用'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      type="button"
-                      onClick={() => handleResetPassword(user)}
-                      disabled={resetPasswordMutation.isPending}
-                      className="mr-4 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:text-gray-300"
-                      title="为该用户设置新密码"
-                    >
-                      <RotateCcw className={`h-4 w-4 ${
-                        resetPasswordMutation.isPending && resetPasswordMutation.variables?.userId === user.id
-                          ? 'animate-spin'
-                          : ''
-                      }`} />
-                      {resetPasswordMutation.isPending && resetPasswordMutation.variables?.userId === user.id
-                        ? '重置中'
-                        : '重置密码'}
-                    </button>
-                    <button
-                      onClick={() => handleOpenModal(user)}
-                      className="text-blue-600 hover:text-blue-900 mr-4"
-                      title="编辑"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteUser(user)}
-                      disabled={isCurrentUser || deleteUserMutation.isPending}
-                      className="inline-flex items-center justify-center rounded-md p-1 text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-transparent"
-                      title={isCurrentUser ? '不能删除当前登录账号' : '删除用户'}
-                      aria-label={isCurrentUser ? '不能删除当前登录账号' : `删除${user.name}`}
-                    >
-                      <Trash2 className={`h-4 w-4 ${isDeletingThisUser ? 'animate-pulse' : ''}`} />
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="space-y-3 p-4 md:hidden">
-        {users?.map((user) => {
+      {filteredUsers.length === 0 ? (
+        <div className="p-8 text-center">
+          <p className="text-base font-medium text-gray-700">暂无用户</p>
+          <p className="mt-2 text-sm text-gray-500">可以先添加一个员工账号。</p>
+        </div>
+      ) : (
+      <ul className="divide-y divide-line-soft px-2 py-1 sm:px-4">
+        {filteredUsers.map((user) => {
           const isCurrentUser = user.id === currentUserId;
           const isDeletingThisUser = deleteUserMutation.isPending && deleteUserMutation.variables?.userId === user.id;
           const isResettingThisUser = resetPasswordMutation.isPending && resetPasswordMutation.variables?.userId === user.id;
+          const isUserAdmin = user.role === UserRole.ADMIN;
+          const passwordRevealed = visibleDefaultPasswordIds.has(user.id);
 
           return (
-            <MobileRecordCard key={user.id}>
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-base font-semibold text-gray-900">{user.name}</div>
-                  <div className="mt-1 text-sm text-gray-500">{user.code || '-'} · {user.username}</div>
-                </div>
-                <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${
-                  user.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                }`}>
-                  {user.isActive ? '正常' : '禁用'}
+            <li
+              key={user.id}
+              className="flex flex-col gap-3 rounded-xl px-2 py-3.5 transition-colors hover:bg-canvas sm:flex-row sm:items-center sm:gap-4"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <span
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-semibold text-white shadow-sm ${
+                    isUserAdmin ? 'bg-gradient-to-br from-violet-500 to-purple-500' : 'bg-gradient-to-br from-brand-500 to-[#7AA0FF]'
+                  }`}
+                >
+                  {(user.name || 'U').slice(0, 1)}
                 </span>
-              </div>
-
-              <MobileFieldGrid>
-                <MobileField
-                  label="角色"
-                  value={
-                    <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-                      user.role === UserRole.ADMIN ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'
-                    }`}>
-                      {user.role === UserRole.ADMIN ? '管理员' : '计件工人'}
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-medium text-ink">{user.name}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        isUserAdmin ? 'bg-purple-100 text-purple-700' : 'bg-emerald-50 text-emerald-700'
+                      }`}
+                    >
+                      {isUserAdmin ? '管理员' : '计件工人'}
                     </span>
-                  }
-                />
-                <MobileField label="电话" value={user.phone || '-'} align="right" />
-                <MobileField
-                  label="密码"
-                  value={
-                    <span className="inline-flex items-center gap-2">
-                      {user.passwordStatus === 'default'
-                        ? `默认(${visibleDefaultPasswordIds.has(user.id) ? '123456' : '••••••'})`
-                        : '已修改'}
-                      {user.passwordStatus === 'default' ? (
+                    {isCurrentUser && (
+                      <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-600">本人</span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-tertiary">
+                    <span>工号 {user.code || '-'}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>账号 {user.username}</span>
+                    {user.phone ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>{user.phone}</span>
+                      </>
+                    ) : null}
+                    <span aria-hidden="true">·</span>
+                    {user.passwordStatus === 'default' ? (
+                      <span className="inline-flex items-center gap-1">
+                        默认密码 {passwordRevealed ? '123456' : '••••••'}
                         <button
                           type="button"
                           onClick={() => toggleDefaultPasswordVisibility(user.id)}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                          title={visibleDefaultPasswordIds.has(user.id) ? '隐藏默认密码' : '查看默认密码'}
-                          aria-label={visibleDefaultPasswordIds.has(user.id) ? '隐藏默认密码' : '查看默认密码'}
+                          className="rounded p-0.5 text-ink-tertiary transition-colors hover:text-ink"
+                          title={passwordRevealed ? '隐藏默认密码' : '查看默认密码'}
+                          aria-label={passwordRevealed ? '隐藏默认密码' : '查看默认密码'}
                         >
-                          {visibleDefaultPasswordIds.has(user.id) ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          {passwordRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                         </button>
-                      ) : null}
-                    </span>
-                  }
-                />
-                <MobileField label="员工账号" value={user.username} align="right" />
-              </MobileFieldGrid>
+                      </span>
+                    ) : (
+                      <span>已改密码</span>
+                    )}
+                  </div>
+                </div>
+              </div>
 
-              <MobileActionBar>
-                <button
-                  type="button"
-                  onClick={() => handleResetPassword(user)}
-                  disabled={resetPasswordMutation.isPending}
-                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-300"
+              <div className="flex items-center justify-between gap-2 sm:justify-end">
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    user.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'
+                  }`}
                 >
-                  <RotateCcw className={`h-4 w-4 ${isResettingThisUser ? 'animate-spin' : ''}`} />
-                  {isResettingThisUser ? '重置中' : '重置密码'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOpenModal(user)}
-                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
-                >
-                  <Edit2 className="h-4 w-4" />
-                  编辑
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteUser(user)}
-                  disabled={isCurrentUser || deleteUserMutation.isPending}
-                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300 disabled:hover:bg-transparent"
-                >
-                  <Trash2 className={`h-4 w-4 ${isDeletingThisUser ? 'animate-pulse' : ''}`} />
-                  删除
-                </button>
-              </MobileActionBar>
-            </MobileRecordCard>
+                  {user.isActive ? '正常' : '禁用'}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleResetPassword(user)}
+                    disabled={resetPasswordMutation.isPending}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm text-ink-secondary transition-colors hover:bg-white hover:text-ink disabled:cursor-not-allowed disabled:text-ink-tertiary"
+                    title="为该用户设置新密码"
+                  >
+                    <RotateCcw className={`h-4 w-4 ${isResettingThisUser ? 'animate-spin' : ''}`} />
+                    <span className="hidden sm:inline">{isResettingThisUser ? '重置中' : '重置密码'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenModal(user)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-ink-tertiary transition-colors hover:bg-white hover:text-brand-600"
+                    title="编辑"
+                    aria-label={`编辑${user.name}`}
+                  >
+                    <Edit2 className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteUser(user)}
+                    disabled={isCurrentUser || deleteUserMutation.isPending}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-ink-tertiary transition-colors hover:bg-white hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-tertiary"
+                    title={isCurrentUser ? '不能删除当前登录账号' : '删除用户'}
+                    aria-label={isCurrentUser ? '不能删除当前登录账号' : `删除${user.name}`}
+                  >
+                    <Trash2 className={`h-4 w-4 ${isDeletingThisUser ? 'animate-pulse' : ''}`} />
+                  </button>
+                </div>
+              </div>
+            </li>
           );
         })}
-      </div>
+      </ul>
+      )}
 
       {resettingUser && (
         <div className="fixed inset-0 z-50 overflow-y-auto">

@@ -41,7 +41,7 @@ const EmployeeDashboard: React.FC = () => {
     <Layout>
       <PageHeader title="工作台" subtitle="查看您的工作进度和工资统计" />
       
-      <div className="p-8 space-y-8">
+      <div className="space-y-6 px-4 pb-4 pt-0 md:px-6 md:pb-6">
         {/* 状态卡片 */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {isLoading ? (

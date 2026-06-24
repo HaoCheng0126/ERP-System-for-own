@@ -2,12 +2,19 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, DollarSign, Edit, Package, Plus, Save, Trash2, X } from 'lucide-react';
 import ActionableEmptyState from '../components/ActionableEmptyState';
+import FilterPanel, { ActiveFilter, FilterField, SearchInput } from '../components/FilterPanel';
 import QueryStateBanner from '../components/QueryStateBanner';
 import Layout from '../components/Layout';
 import PageHeader from '../components/PageHeader';
 import api from '../utils/api';
 import { formatEditableDecimal, formatUnitPrice } from '../utils/format';
-import { Product, Customer, ProductPrice } from '../types';
+import { isNonZeroAmount, matchesKeyword } from '../utils/filtering';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+import { useCounterparties } from '../hooks/useCounterparties';
+import { Product, ProductType, Customer, CustomerType, ProductPrice } from '../types';
+
+type StockFilter = 'all' | 'inStock' | 'outOfStock';
+type ProductTypeFilter = 'all' | ProductType;
 
 type ProductFormState = Omit<
   Product,
@@ -24,6 +31,7 @@ const createEmptyProductForm = (): ProductFormState => ({
   name: '',
   specification: '',
   unit: '',
+  type: ProductType.FINISHED,
   costPrice: '',
   basePrice: '',
   stock: 0,
@@ -41,6 +49,10 @@ const Products: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<EditableProductState | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
   const [newProduct, setNewProduct] = useState<ProductFormState>(createEmptyProductForm());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [typeFilter, setTypeFilter] = useState<ProductTypeFilter>('all');
+  const [stockFilter, setStockFilter] = useState<StockFilter>('all');
+  const debouncedSearchTerm = useDebouncedValue(searchTerm);
 
   const [customerPrice, setCustomerPrice] = useState<{ customerId: string; price: string | number }>({
     customerId: '',
@@ -58,14 +70,8 @@ const Products: React.FC = () => {
     },
   });
 
-  // 获取客户列表
-  const { data: customers } = useQuery({
-    queryKey: ['customers'],
-    queryFn: async () => {
-      const response = await api.get('/customers');
-      return response.data;
-    },
-  });
+  // 获取客户列表（仅客户类型，供产品报价使用）
+  const { data: customers } = useCounterparties(CustomerType.CLIENT);
 
   // 获取产品价格列表
   const { data: productPrices } = useQuery({
@@ -97,6 +103,7 @@ const Products: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
       setShowAddModal(false);
       setNewProduct(createEmptyProductForm());
     },
@@ -115,6 +122,7 @@ const Products: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
       setEditingProduct(null);
     },
   });
@@ -127,6 +135,7 @@ const Products: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventoryStats'] });
     },
   });
 
@@ -141,6 +150,10 @@ const Products: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productPrices', expandedProductId] });
+      queryClient.invalidateQueries({ queryKey: ['deliveryOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
       setCustomerPrice({ customerId: '', price: '' });
     },
   });
@@ -153,6 +166,10 @@ const Products: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productPrices', expandedProductId] });
+      queryClient.invalidateQueries({ queryKey: ['deliveryOrders'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
     },
   });
 
@@ -188,6 +205,51 @@ const Products: React.FC = () => {
     }
   };
 
+  const filteredProducts = ((products || []) as Product[]).filter((product) => {
+    const keywordMatch = matchesKeyword(debouncedSearchTerm, [
+      product.name,
+      product.specification,
+      product.unit,
+    ]);
+    const stockValue = Number(product.stock || 0);
+    const stockMatch =
+      stockFilter === 'all' ||
+      (stockFilter === 'inStock' && isNonZeroAmount(stockValue)) ||
+      (stockFilter === 'outOfStock' && !isNonZeroAmount(stockValue));
+    const typeMatch = typeFilter === 'all' || (product.type || ProductType.FINISHED) === typeFilter;
+    return keywordMatch && stockMatch && typeMatch;
+  });
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setTypeFilter('all');
+    setStockFilter('all');
+  };
+
+  const activeFilters: ActiveFilter[] = [
+    searchTerm
+      ? {
+          key: 'keyword',
+          label: `关键词: ${searchTerm}`,
+          onRemove: () => setSearchTerm(''),
+        }
+      : null,
+    stockFilter !== 'all'
+      ? {
+          key: 'stock',
+          label: `库存: ${stockFilter === 'inStock' ? '有库存' : '无库存'}`,
+          onRemove: () => setStockFilter('all'),
+        }
+      : null,
+    typeFilter !== 'all'
+      ? {
+          key: 'type',
+          label: `类型: ${typeFilter === ProductType.RAW_MATERIAL ? '原材料' : '成品'}`,
+          onRemove: () => setTypeFilter('all'),
+        }
+      : null,
+  ].filter((item): item is ActiveFilter => Boolean(item));
+
   return (
     <Layout>
       <PageHeader 
@@ -196,7 +258,7 @@ const Products: React.FC = () => {
         action={{ label: '添加产品', onClick: () => setShowAddModal(true) }}
       />
       
-      <div className="p-4 md:p-8">
+      <div className="px-4 pb-4 pt-0 md:px-6 md:pb-6">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -204,25 +266,72 @@ const Products: React.FC = () => {
           errorText="产品资料暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          {!isLoading && (products || []).length === 0 ? (
+        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+          <FilterPanel
+            totalCount={(products || []).length}
+            filteredCount={filteredProducts.length}
+            activeFilters={activeFilters}
+            onClear={clearFilters}
+            primary={
+              <>
+                <FilterField label="关键词" className="lg:w-72">
+                  <SearchInput
+                    value={searchTerm}
+                    onChange={setSearchTerm}
+                    placeholder="产品名称、规格、单位"
+                  />
+                </FilterField>
+                <FilterField label="库存状态" className="lg:w-40">
+                  <select
+                    value={stockFilter}
+                    onChange={(e) => setStockFilter(e.target.value as StockFilter)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="all">全部</option>
+                    <option value="inStock">有库存</option>
+                    <option value="outOfStock">无库存</option>
+                  </select>
+                </FilterField>
+                <FilterField label="产品类型" className="lg:w-40">
+                  <select
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value as ProductTypeFilter)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="all">全部</option>
+                    <option value={ProductType.FINISHED}>成品</option>
+                    <option value={ProductType.RAW_MATERIAL}>原材料</option>
+                  </select>
+                </FilterField>
+              </>
+            }
+          />
+          {!isLoading && filteredProducts.length === 0 ? (
             <div className="p-6">
               <ActionableEmptyState
                 icon={Package}
-                title="先添加第一个产品"
-                description="产品名称、规格、单位和入库单价是入库单、送货单、库存和工资计算的基础。"
-                actionLabel="添加产品"
-                onAction={() => setShowAddModal(true)}
+                title={(products || []).length ? '没有符合筛选条件的产品' : '先添加第一个产品'}
+                description={(products || []).length ? '当前筛选下没有产品，清除筛选后可查看全部产品规格。' : '产品名称、规格、单位和入库单价是入库单、送货单、库存和工资计算的基础。'}
+                actionLabel={(products || []).length ? '清除筛选' : '添加产品'}
+                onAction={() => {
+                  if ((products || []).length) {
+                    clearFilters();
+                    return;
+                  }
+                  setShowAddModal(true);
+                }}
               />
             </div>
-          ) : (products || []).length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[800px]">
+          ) : filteredProducts.length > 0 ? (
+          <>
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[900px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="w-10 px-6 py-3"></th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">产品名称</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">规格</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">单位</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">当前库存</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">入库单价 (元/单位)</th>
@@ -230,20 +339,24 @@ const Products: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {(products || []).map((product: Product) => (
+                {filteredProducts.map((product: Product) => (
                   <React.Fragment key={product.id}>
                     <tr className={expandedProductId === product.id ? 'bg-blue-50' : ''}>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={() => handleToggleExpand(product.id)}
-                          className="text-gray-400 hover:text-gray-600 focus:outline-none"
-                        >
-                          {expandedProductId === product.id ? (
-                            <ChevronDown className="w-5 h-5" />
-                          ) : (
-                            <ChevronRight className="w-5 h-5" />
-                          )}
-                        </button>
+                        {(product.type || ProductType.FINISHED) === ProductType.FINISHED ? (
+                          <button
+                            onClick={() => handleToggleExpand(product.id)}
+                            className="text-gray-400 hover:text-gray-600 focus:outline-none"
+                          >
+                            {expandedProductId === product.id ? (
+                              <ChevronDown className="w-5 h-5" />
+                            ) : (
+                              <ChevronRight className="w-5 h-5" />
+                            )}
+                          </button>
+                        ) : (
+                          <span className="block w-5" />
+                        )}
                       </td>
                       {editingProduct?.id === product.id ? (
                         <>                        
@@ -254,6 +367,16 @@ const Products: React.FC = () => {
                               onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
                               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                             />
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <select
+                              value={editingProduct.type || ProductType.FINISHED}
+                              onChange={(e) => setEditingProduct({ ...editingProduct, type: e.target.value as ProductType })}
+                              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                            >
+                              <option value={ProductType.FINISHED}>成品</option>
+                              <option value={ProductType.RAW_MATERIAL}>原材料</option>
+                            </select>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <input
@@ -308,6 +431,15 @@ const Products: React.FC = () => {
                         <>
                           <td className="px-6 py-4 whitespace-nowrap">{product.name}</td>
                         <td className="px-6 py-4 whitespace-nowrap">{product.specification}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
+                            (product.type || ProductType.FINISHED) === ProductType.RAW_MATERIAL
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {(product.type || ProductType.FINISHED) === ProductType.RAW_MATERIAL ? '原材料' : '成品'}
+                          </span>
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap">{product.unit}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right">{product.stock || 0}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right">¥{formatUnitPrice(product.costPrice)}</td>
@@ -330,9 +462,9 @@ const Products: React.FC = () => {
                     </tr>
                     
                     {/* Expanded Row for Customer Prices */}
-                    {expandedProductId === product.id && (
+                    {expandedProductId === product.id && (product.type || ProductType.FINISHED) === ProductType.FINISHED && (
                       <tr>
-                        <td colSpan={7} className="bg-gray-50/80 px-6 py-6 border-b border-gray-200 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]">
+                        <td colSpan={8} className="bg-gray-50/80 px-6 py-6 border-b border-gray-200 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]">
                           <div className="w-full">
                             <div className="flex items-center justify-between mb-6">
                               <div className="flex items-center gap-3">
@@ -421,14 +553,229 @@ const Products: React.FC = () => {
               </tbody>
             </table>
           </div>
+
+          <div className="space-y-3 p-3 md:hidden">
+            {filteredProducts.map((product: Product) => {
+              const isEditing = editingProduct?.id === product.id;
+              const isFinished = (product.type || ProductType.FINISHED) === ProductType.FINISHED;
+              const isRaw = (product.type || ProductType.FINISHED) === ProductType.RAW_MATERIAL;
+              const isExpanded = expandedProductId === product.id;
+              return (
+                <div key={product.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                  {isEditing ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-500">产品名称</label>
+                        <input
+                          type="text"
+                          value={editingProduct.name}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-gray-500">类型</label>
+                          <select
+                            value={editingProduct.type || ProductType.FINISHED}
+                            onChange={(e) => setEditingProduct({ ...editingProduct, type: e.target.value as ProductType })}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                          >
+                            <option value={ProductType.FINISHED}>成品</option>
+                            <option value={ProductType.RAW_MATERIAL}>原材料</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-gray-500">单位</label>
+                          <input
+                            type="text"
+                            value={editingProduct.unit}
+                            onChange={(e) => setEditingProduct({ ...editingProduct, unit: e.target.value })}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-500">规格</label>
+                        <input
+                          type="text"
+                          value={editingProduct.specification}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, specification: e.target.value })}
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-gray-500">当前库存</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={editingProduct.stock ?? 0}
+                            onChange={(e) => setEditingProduct({ ...editingProduct, stock: parseFloat(e.target.value) })}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-gray-500">入库单价</label>
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={editingProduct.costPrice}
+                            onChange={(e) => setEditingProduct({ ...editingProduct, costPrice: e.target.value })}
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={handleUpdateProduct}
+                          className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                        >
+                          <Save className="h-4 w-4" />
+                          保存
+                        </button>
+                        <button
+                          onClick={() => setEditingProduct(null)}
+                          className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          <X className="h-4 w-4" />
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-base font-semibold text-gray-900">{product.name}</span>
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                                isRaw ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                              }`}
+                            >
+                              {isRaw ? '原材料' : '成品'}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-sm text-gray-500">
+                            规格 {product.specification || '-'} · 单位 {product.unit || '-'}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            onClick={() => setEditingProduct(toEditableProductForm(product))}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-blue-600 hover:bg-blue-50"
+                            aria-label="编辑"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteProduct(product.id)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-red-600 hover:bg-red-50"
+                            aria-label="删除"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-3">
+                        <div>
+                          <div className="text-xs text-gray-500">当前库存</div>
+                          <div className="mt-0.5 text-sm font-semibold tabular-nums text-gray-900">{product.stock || 0}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500">入库单价</div>
+                          <div className="mt-0.5 text-sm font-semibold tabular-nums text-gray-900">¥{formatUnitPrice(product.costPrice)}</div>
+                        </div>
+                      </div>
+                      {isFinished && (
+                        <>
+                          <button
+                            onClick={() => handleToggleExpand(product.id)}
+                            className="mt-3 flex w-full items-center justify-center gap-1 border-t border-gray-100 pt-3 text-sm font-medium text-blue-600"
+                          >
+                            {isExpanded ? '收起客户送货单价' : '客户特定送货单价'}
+                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </button>
+                          {isExpanded && (
+                            <div className="mt-3 space-y-3">
+                              <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                <select
+                                  value={customerPrice.customerId}
+                                  onChange={(e) => setCustomerPrice({ ...customerPrice, customerId: e.target.value })}
+                                  className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                >
+                                  <option value="">选择客户</option>
+                                  {customers?.map((customer: Customer) => (
+                                    <option key={customer.id} value={customer.id}>
+                                      {customer.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="number"
+                                  step="0.0001"
+                                  placeholder={`单价 (元/${product.unit})`}
+                                  value={customerPrice.price}
+                                  onChange={(e) => setCustomerPrice({ ...customerPrice, price: e.target.value })}
+                                  className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                />
+                                <button
+                                  onClick={handleSetPrice}
+                                  disabled={!customerPrice.customerId || customerPrice.price === '' || Number(customerPrice.price) <= 0}
+                                  className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Plus className="h-4 w-4" />
+                                  添加客户价
+                                </button>
+                              </div>
+                              {productPrices && productPrices.length > 0 ? (
+                                <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
+                                  {productPrices.map((price: ProductPrice) => (
+                                    <div key={price.id} className="flex items-center justify-between gap-2 px-3 py-2.5">
+                                      <div className="min-w-0">
+                                        <div className="truncate text-sm font-medium text-gray-900">{price.customer?.name}</div>
+                                        {price.customer?.contactPerson && (
+                                          <div className="text-xs text-gray-400">{price.customer.contactPerson}</div>
+                                        )}
+                                      </div>
+                                      <div className="flex shrink-0 items-center gap-3">
+                                        <span className="text-sm font-semibold tabular-nums text-gray-900">¥{formatUnitPrice(price.price)}</span>
+                                        <button
+                                          onClick={() => handleDeletePrice(price.id)}
+                                          className="text-gray-400 hover:text-red-600"
+                                          aria-label="删除"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="rounded-lg border border-dashed border-gray-200 px-3 py-6 text-center text-sm text-gray-400">
+                                  暂无客户特定价格
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          </>
           ) : null}
         </div>
       </div>
 
       {/* 添加产品模态框 */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center sm:p-4">
+          <div className="relative max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:max-w-md sm:rounded-lg">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">添加产品</h3>
               <button
@@ -465,6 +812,17 @@ const Products: React.FC = () => {
                   onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">产品类型</label>
+                <select
+                  value={newProduct.type}
+                  onChange={(e) => setNewProduct({ ...newProduct, type: e.target.value as ProductType })}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                >
+                  <option value={ProductType.FINISHED}>成品</option>
+                  <option value={ProductType.RAW_MATERIAL}>原材料</option>
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700">初始库存</label>

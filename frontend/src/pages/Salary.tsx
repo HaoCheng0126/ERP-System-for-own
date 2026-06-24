@@ -1,27 +1,41 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Calendar, Download, X } from 'lucide-react';
+import { Download } from 'lucide-react';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
+import FilterPanel, { ActiveFilter, DateShortcutGroup, FilterField, SearchInput } from '../components/FilterPanel';
 import Layout from '../components/Layout';
-import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
+import { MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import QueryStateBanner from '../components/QueryStateBanner';
+import DisclosureSection from '../components/records/DisclosureSection';
+import DateSectionHeader from '../components/records/DateSectionHeader';
+import EntityCardHeader from '../components/records/EntityCardHeader';
+import RecordsSummaryBar from '../components/records/RecordsSummaryBar';
 import api from '../utils/api';
-import { formatAmount, formatUnitPrice } from '../utils/format';
-import { Company, InventoryRecord, SalaryReport, User, UserRole } from '../types';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatUnitPrice } from '../utils/format';
+import { DateRangeShortcut, getDateRangeByShortcut, matchesKeyword } from '../utils/filtering';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+import { Company, InventoryRecord, InventoryRecordSubmissionMode, SalaryReport, User, UserRole } from '../types';
 import { getUserRole } from '../utils/auth';
-import { createPdfFileFromElement, downloadPdfFile, sharePdfFile, toSafePdfFileName } from '../utils/printShare';
+import { exportPrintable, getShareFallbackMessage, toSafePdfFileName } from '../utils/printShare';
 
-type SalaryDetailsState = {
-  user: User;
+type SalaryDateGroup = {
+  date: string;
   records: InventoryRecord[];
+  rowCount: number;
+  totalAmount: number;
 };
 
-type SalaryDailySummaryRow = {
+type SalarySlipDetailRow = {
+  id: string;
   dateKey: string;
-  recordCount: number;
-  totalQuantity: number;
+  recordNumber: string;
+  productName: string;
+  specification: string;
+  unit: string;
+  quantity: number;
+  unitPrice: number;
   totalAmount: number;
 };
 
@@ -34,7 +48,7 @@ type PrintableSalarySlip = {
   totalAmount: number;
   totalQuantity: number;
   totalRecords: number;
-  rows: SalaryDailySummaryRow[];
+  rows: SalarySlipDetailRow[];
 };
 
 const getDefaultDateRange = () => ({
@@ -61,6 +75,25 @@ const getPeriodLabel = (startDate: string, endDate: string) => {
     return `截至 ${endDate}`;
   }
   return '全部时间';
+};
+
+const getExportDateRangeFileLabel = (startDate: string, endDate: string) => {
+  if (startDate && endDate) {
+    return `${startDate}-${endDate}`;
+  }
+  return '全部日期';
+};
+
+const toSafeFileBaseName = (name: string) =>
+  name
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || '导出文件';
+
+const escapeCsvValue = (value: string | number | null | undefined) => {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
 const getSalarySlipTitle = (startDate: string, endDate: string) => {
@@ -95,32 +128,62 @@ const getGeneratedAtLabel = () =>
 const getSortedRecords = (records: InventoryRecord[]) =>
   [...records].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
 
+const isReturnDeduction = (record: InventoryRecord) =>
+  record.submissionMode === InventoryRecordSubmissionMode.RETURN_DEDUCTION;
+
+// 把某员工的入库记录按日期分组（倒序），用于时间线展示。
+const groupRecordsByDate = (records: InventoryRecord[]): SalaryDateGroup[] => {
+  const buckets = new Map<string, InventoryRecord[]>();
+  records.forEach((record) => {
+    const key = toDateKey(record.createdAt);
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.push(record);
+    } else {
+      buckets.set(key, [record]);
+    }
+  });
+
+  return Array.from(buckets.entries())
+    .sort((left, right) => (left[0] < right[0] ? 1 : -1))
+    .map(([date, dateRecords]) => {
+      const sorted = [...dateRecords].sort(
+        (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+      );
+      return {
+        date,
+        records: sorted,
+        rowCount: sorted.length,
+        totalAmount: sorted.reduce((sum, record) => sum + Number(record.totalAmount || 0), 0),
+      };
+    });
+};
+
 const Salary: React.FC = () => {
   const [dateRange, setDateRange] = useState(getDefaultDateRange());
-  const [selectedUserRecords, setSelectedUserRecords] = useState<SalaryDetailsState | null>(null);
+  const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<string>>(new Set());
   const [exportUserId, setExportUserId] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [employeeSearch, setEmployeeSearch] = useState('');
   const printableSlipRef = useRef<HTMLDivElement>(null);
   const userRole = getUserRole();
   const isAdmin = userRole === UserRole.ADMIN;
+  const debouncedEmployeeSearch = useDebouncedValue(employeeSearch);
 
-  const handleDateShortcut = (type: 'month' | 'year' | 'all') => {
-    const today = new Date();
-    let start = '';
-    let end = '';
+  const handleDateShortcut = (shortcut: DateRangeShortcut) => {
+    setDateRange(getDateRangeByShortcut(shortcut));
+  };
 
-    if (type === 'month') {
-      start = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-      end = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-    } else if (type === 'year') {
-      start = new Date(today.getFullYear(), 0, 1).toISOString().split('T')[0];
-      end = new Date(today.getFullYear(), 11, 31).toISOString().split('T')[0];
-    } else if (type === 'all') {
-      start = '2020-01-01';
-      end = '2099-12-31';
-    }
-
-    setDateRange({ startDate: start, endDate: end });
+  const toggleEmployeeExpand = (userId: string) => {
+    setExpandedEmployeeIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+      }
+      return next;
+    });
   };
 
   const { data: salaryReport, isLoading, error, refetch } = useQuery<SalaryReport>({
@@ -153,23 +216,6 @@ const Salary: React.FC = () => {
       return null;
     }
 
-    const rowsMap = new Map<string, SalaryDailySummaryRow>();
-
-    getSortedRecords(target.records).forEach((record) => {
-      const dateKey = toDateKey(record.createdAt);
-      const currentRow = rowsMap.get(dateKey) || {
-        dateKey,
-        recordCount: 0,
-        totalQuantity: 0,
-        totalAmount: 0,
-      };
-
-      currentRow.recordCount += 1;
-      currentRow.totalQuantity += Number(record.quantity || 0);
-      currentRow.totalAmount += Number(record.totalAmount || 0);
-      rowsMap.set(dateKey, currentRow);
-    });
-
     return {
       company,
       user: target.user,
@@ -179,7 +225,17 @@ const Salary: React.FC = () => {
       totalAmount: Number(target.totalAmount || 0),
       totalQuantity: Number(target.totalQuantity || 0),
       totalRecords: target.records.length,
-      rows: Array.from(rowsMap.values()).sort((left, right) => left.dateKey.localeCompare(right.dateKey)),
+      rows: getSortedRecords(target.records).map((record) => ({
+        id: record.id,
+        dateKey: toDateKey(record.createdAt),
+        recordNumber: record.recordNumber || '-',
+        productName: record.product?.name || '-',
+        specification: record.product?.specification || '-',
+        unit: record.product?.unit || '-',
+        quantity: Number(record.quantity || 0),
+        unitPrice: Number(record.unitPrice || 0),
+        totalAmount: Number(record.totalAmount || 0),
+      })),
     };
   }, [company, dateRange.endDate, dateRange.startDate, exportUserId, salaryReport]);
 
@@ -187,69 +243,112 @@ const Salary: React.FC = () => {
     if (!printableSlip || !printableSlipRef.current) return;
 
     setIsExportingPdf(true);
-    const filename = toSafePdfFileName(`工资条_${printableSlip.user.name}_${printableSlip.periodLabel}`);
+    const filename = toSafePdfFileName(
+      `${getExportDateRangeFileLabel(dateRange.startDate, dateRange.endDate)}_${printableSlip.user.name}工资`,
+    );
 
     try {
-      const file = await createPdfFileFromElement(printableSlipRef.current, {
-        filename,
-        orientation: 'portrait',
-        marginMm: 16,
-      });
+      const result = await exportPrintable(
+        printableSlipRef.current,
+        {
+          filename,
+          orientation: 'portrait',
+          marginMm: 16,
+          title: filename.replace(/\.pdf$/i, ''),
+          text: `${printableSlip.user.name}的工资条`,
+        },
+        action,
+      );
 
-      if (action === 'save') {
-        downloadPdfFile(file);
-        setExportUserId(null);
-        return;
-      }
-
-      const result = await sharePdfFile(file, {
-        title: filename.replace(/\.pdf$/i, ''),
-        text: `${printableSlip.user.name}的工资条`,
-      });
-
-      if (result === 'downloaded') {
-        window.alert('当前浏览器无法直接分享到微信，已保存 PDF，可发送到微信。');
+      if (result === 'fallback-download') {
+        window.alert(getShareFallbackMessage());
       }
       if (result !== 'cancelled') {
         setExportUserId(null);
       }
     } catch {
-      window.alert('PDF 生成失败，请稍后重试。');
+      window.alert('导出失败，请稍后重试。');
     } finally {
       setIsExportingPdf(false);
     }
   };
 
-  const handleSearch = () => {
-    refetch();
+  const visibleSalaryRows = useMemo(() => {
+    return (salaryReport?.report || []).filter((item) =>
+      isAdmin
+        ? matchesKeyword(debouncedEmployeeSearch, [item.user.name, item.user.code, item.user.username, item.user.phone])
+        : true,
+    );
+  }, [debouncedEmployeeSearch, isAdmin, salaryReport]);
+
+  const visibleSalarySummary = useMemo(
+    () => ({
+      totalRecords: visibleSalaryRows.reduce((sum, item) => sum + (item.records?.length || 0), 0),
+      totalAmount: visibleSalaryRows.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0),
+      totalQuantity: visibleSalaryRows.reduce((sum, item) => sum + Number(item.totalQuantity || 0), 0),
+    }),
+    [visibleSalaryRows],
+  );
+
+  const salarySummaryStats = useMemo(
+    () => [
+      { label: '员工数', value: String(visibleSalaryRows.length) },
+      { label: '入库总数量', value: formatDisplayDecimal(visibleSalarySummary.totalQuantity, 4) },
+      { label: '工资总额', value: `¥${formatAmount(visibleSalarySummary.totalAmount)}` },
+    ],
+    [visibleSalaryRows.length, visibleSalarySummary.totalAmount, visibleSalarySummary.totalQuantity],
+  );
+
+  const clearFilters = () => {
+    setDateRange({ startDate: '', endDate: '' });
+    setEmployeeSearch('');
   };
+
+  const activeFilters: ActiveFilter[] = [
+    dateRange.startDate || dateRange.endDate
+      ? {
+          key: 'date',
+          label: `日期: ${dateRange.startDate || '不限'} 至 ${dateRange.endDate || '不限'}`,
+          onRemove: () => setDateRange({ startDate: '', endDate: '' }),
+        }
+      : null,
+    isAdmin && employeeSearch
+      ? {
+          key: 'employee',
+          label: `员工: ${employeeSearch}`,
+          onRemove: () => setEmployeeSearch(''),
+        }
+      : null,
+  ].filter((item): item is ActiveFilter => Boolean(item));
 
   const handleExport = () => {
     if (!salaryReport) return;
 
-    let csvContent = 'data:text/csv;charset=utf-8,';
-    csvContent += '姓名,总金额,总数量\n';
-
-    salaryReport.report.forEach((item) => {
-      csvContent += `${item.user.name},¥${formatAmount(item.totalAmount)},${item.totalQuantity}\n`;
-    });
-
-    const encodedUri = encodeURI(csvContent);
+    const rows = [
+      ['员工编号', '姓名', '账号', '总数量', '总金额'],
+      ...visibleSalaryRows.map((item) => [
+        item.user.code || '',
+        item.user.name,
+        item.user.username,
+        formatAmount(item.totalQuantity),
+        formatAmount(item.totalAmount),
+      ]),
+    ];
+    const csvContent = `\uFEFF${rows.map((row) => row.map(escapeCsvValue).join(',')).join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `工资报表_${dateRange.startDate}_${dateRange.endDate}.csv`);
+    link.href = url;
+    link.download = `${toSafeFileBaseName(`${getExportDateRangeFileLabel(dateRange.startDate, dateRange.endDate)}工资汇总`)}.csv`;
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleShowDetails = (user: User, records: InventoryRecord[]) => {
-    setSelectedUserRecords({ user, records: getSortedRecords(records) });
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
   return (
     <Layout>
-      <PageHeader title="工资报表" subtitle="查看计件工资统计" />
+      <PageHeader title="工资报表" />
 
       <style>{`
         @page {
@@ -312,7 +411,7 @@ const Salary: React.FC = () => {
         }
       `}</style>
 
-      <div className="p-4 md:p-8">
+      <div className="px-4 pb-4 pt-0 md:px-6 md:pb-6">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -320,315 +419,206 @@ const Salary: React.FC = () => {
           errorText="工资报表暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="mb-6 rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="p-4 md:p-6">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
-              <div className="min-w-0">
-                <label className="mb-1 block text-sm font-medium text-gray-700">开始日期</label>
-                <DateField
-                  value={dateRange.startDate}
-                  onChange={(value) => setDateRange({ ...dateRange, startDate: value })}
-                  className="w-full"
-                />
-              </div>
-              <div className="min-w-0">
-                <label className="mb-1 block text-sm font-medium text-gray-700">结束日期</label>
-                <DateField
-                  value={dateRange.endDate}
-                  onChange={(value) => setDateRange({ ...dateRange, endDate: value })}
-                  className="w-full"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 pb-0.5 sm:col-span-2 lg:col-span-1">
-                <button
-                  onClick={() => handleDateShortcut('month')}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  本月
-                </button>
-                <button
-                  onClick={() => handleDateShortcut('year')}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  今年
-                </button>
-                <button
-                  onClick={() => handleDateShortcut('all')}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  全部
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2 sm:col-span-2 sm:flex-row lg:col-span-1 lg:ml-auto">
-                <button
-                  onClick={handleSearch}
-                  className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
-                >
-                  <Calendar className="mr-2 h-4 w-4" />
-                  查询
-                </button>
-                {salaryReport && (
-                  <button
-                    onClick={handleExport}
-                    className="inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    导出CSV
-                  </button>
+        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+          <FilterPanel
+            totalCount={salaryReport?.report.length || 0}
+            filteredCount={visibleSalaryRows.length}
+            activeFilters={activeFilters}
+            onClear={clearFilters}
+            primary={
+              <>
+                <FilterField label="开始日期" className="lg:w-36">
+                  <DateField
+                    value={dateRange.startDate}
+                    onChange={(value) => setDateRange({ ...dateRange, startDate: value })}
+                    className="w-full"
+                  />
+                </FilterField>
+                <FilterField label="结束日期" className="lg:w-36">
+                  <DateField
+                    value={dateRange.endDate}
+                    onChange={(value) => setDateRange({ ...dateRange, endDate: value })}
+                    className="w-full"
+                  />
+                </FilterField>
+                <FilterField label="快捷日期" className="sm:col-span-2 lg:w-56">
+                  <DateShortcutGroup shortcuts={['month', 'year', 'all']} onSelect={handleDateShortcut} />
+                </FilterField>
+                {isAdmin && (
+                  <FilterField label="员工" className="sm:col-span-2 lg:min-w-[12rem] lg:flex-1">
+                    <SearchInput
+                      value={employeeSearch}
+                      onChange={setEmployeeSearch}
+                      placeholder="姓名、编号、账号、电话"
+                    />
+                  </FilterField>
                 )}
-              </div>
-            </div>
-          </div>
-        </div>
+              </>
+            }
+            actions={
+              salaryReport ? (
+                <button
+                  onClick={handleExport}
+                  disabled={visibleSalaryRows.length === 0}
+                  className="inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  导出CSV
+                </button>
+              ) : undefined
+            }
+          />
 
         {salaryReport && (
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="hidden overflow-x-auto md:block">
-              <table className="w-full min-w-[760px]">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">姓名</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">总金额</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">总数量</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {(salaryReport.report || []).map((item, index) => (
-                    <tr key={index}>
-                      <td className="whitespace-nowrap px-6 py-4">
-                        <div className="text-sm font-medium text-gray-900">{item.user.name}</div>
-                        <div className="text-sm text-gray-500">{item.user.code || item.user.username}</div>
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium text-gray-900">
-                        ¥{formatAmount(item.totalAmount)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-right text-sm text-gray-900">
-                        {item.totalQuantity}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
-                        <div className="flex justify-end gap-4">
-                          <button
-                            onClick={() => handleShowDetails(item.user, item.records)}
-                            className="text-blue-600 hover:text-blue-900"
-                          >
-                            查看详情
-                          </button>
-                          {isAdmin && (
-                            <button
-                              onClick={() => setExportUserId(item.user.id)}
-                              className="inline-flex items-center text-emerald-600 hover:text-emerald-800"
-                            >
-                              <Download className="mr-1 h-4 w-4" />
-                              导出工资条
-                            </button>
+          <div className="bg-canvas p-4 md:p-6">
+            {visibleSalaryRows.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-6 py-20 text-center">
+                <p className="text-base font-medium text-gray-700">没有符合筛选条件的工资记录</p>
+                <p className="mt-2 text-sm text-gray-500">清除筛选或调整日期范围后再查看。</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <RecordsSummaryBar stats={salarySummaryStats} />
+                {visibleSalaryRows.map((item) => {
+                  const employeeId = item.user.id;
+                  const isExpanded = expandedEmployeeIds.has(employeeId);
+                  const dateGroups = groupRecordsByDate(item.records || []);
+                  const isNegative = Number(item.totalAmount || 0) < 0;
+
+                  return (
+                    <section
+                      key={employeeId}
+                      className="overflow-hidden rounded-2xl border border-line bg-white shadow-card"
+                    >
+                      <EntityCardHeader
+                        name={item.user.name}
+                        initial={item.user.name.slice(0, 1) || '员'}
+                        stats={[
+                          { label: '工资总额', value: `¥${formatAmount(item.totalAmount)}` },
+                          { label: '入库数量', value: formatDisplayDecimal(item.totalQuantity, 4) },
+                        ]}
+                        note={isNegative ? '本期退货扣款超过新增产值，工资为负，请核对。' : undefined}
+                        expanded={isExpanded}
+                        onToggle={() => toggleEmployeeExpand(employeeId)}
+                        onExport={() => setExportUserId(employeeId)}
+                        exportLabel="工资条"
+                      />
+
+                      <DisclosureSection open={isExpanded}>
+                        <div className="space-y-5 border-t border-line bg-canvas px-3 py-4 sm:px-4">
+                          {dateGroups.length === 0 ? (
+                            <div className="px-1 py-6 text-center text-sm text-ink-tertiary">本期暂无入库记录</div>
+                          ) : (
+                            dateGroups.map((dateGroup) => (
+                              <div key={dateGroup.date} className="space-y-3">
+                                <DateSectionHeader
+                                  date={dateGroup.date}
+                                  count={dateGroup.rowCount}
+                                  countLabel="单"
+                                  amount={dateGroup.totalAmount}
+                                  formatAmount={formatAmount}
+                                />
+                                <div className="overflow-hidden rounded-xl border border-line bg-white">
+                                  <div className="hidden overflow-x-auto md:block">
+                                    <table className="min-w-full">
+                                      <thead>
+                                        <tr className="border-b border-line bg-canvas text-ink-tertiary">
+                                          <th className="px-4 py-2.5 text-left text-xs font-medium">入库单号</th>
+                                          <th className="px-4 py-2.5 text-left text-xs font-medium">产品</th>
+                                          <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
+                                          <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
+                                          <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-line-soft">
+                                        {dateGroup.records.map((record) => {
+                                          const isReturn = isReturnDeduction(record);
+                                          return (
+                                            <tr key={record.id} className="transition-colors hover:bg-brand-50/40">
+                                              <td className="px-4 py-2.5 text-sm text-ink-secondary">{record.recordNumber || '-'}</td>
+                                              <td className="px-4 py-2.5 text-sm text-ink">
+                                                <div className="flex items-center gap-2">
+                                                  <span>
+                                                    {record.product?.name || '-'}
+                                                    {record.product?.specification ? ` (${record.product.specification})` : ''}
+                                                  </span>
+                                                  {isReturn && (
+                                                    <span className="inline-flex shrink-0 items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-600">
+                                                      退货扣款
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </td>
+                                              <td className={`px-4 py-2.5 text-right text-sm tabular-nums ${isReturn ? 'text-rose-600' : 'text-ink'}`}>
+                                                {formatDisplayDecimal(record.quantity, 4)}
+                                              </td>
+                                              <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
+                                                ¥{formatUnitPrice(record.unitPrice)}
+                                              </td>
+                                              <td className={`px-4 py-2.5 text-right text-sm font-medium tabular-nums ${isReturn ? 'text-rose-600' : 'text-ink'}`}>
+                                                ¥{formatAmountDetail(record.totalAmount)}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                  <div className="space-y-3 p-3 md:hidden">
+                                    {dateGroup.records.map((record) => {
+                                      const isReturn = isReturnDeduction(record);
+                                      return (
+                                        <MobileRecordCard key={record.id} className="border-line-soft shadow-none">
+                                          <div className="mb-3 flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                              <div className="flex items-center gap-2">
+                                                <div className="text-sm font-semibold text-ink">{record.recordNumber || '-'}</div>
+                                                {isReturn && (
+                                                  <span className="inline-flex shrink-0 items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-600">
+                                                    退货扣款
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div className="shrink-0 text-right">
+                                              <div className="text-xs text-ink-tertiary">金额</div>
+                                              <div className={`text-base font-bold tabular-nums ${isReturn ? 'text-rose-600' : 'text-ink'}`}>
+                                                ¥{formatAmountDetail(record.totalAmount)}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <MobileFieldGrid>
+                                            <MobileField
+                                              label="产品"
+                                              value={`${record.product?.name || '-'}${record.product?.specification ? ` (${record.product.specification})` : ''}`}
+                                            />
+                                            <MobileField label="单价" value={`¥${formatUnitPrice(record.unitPrice)}`} align="right" />
+                                            <MobileField label="数量" value={formatDisplayDecimal(record.quantity, 4)} />
+                                          </MobileFieldGrid>
+                                        </MobileRecordCard>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+                            ))
                           )}
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="space-y-3 p-4 md:hidden">
-              {(salaryReport.report || []).map((item, index) => (
-                <MobileRecordCard key={item.user.id || index}>
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-base font-semibold text-gray-900">{item.user.name}</div>
-                      <div className="mt-1 text-sm text-gray-500">{item.user.code || item.user.username}</div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div className="text-xs text-gray-500">工资</div>
-                      <div className="text-lg font-bold text-blue-600">¥{formatAmount(item.totalAmount)}</div>
-                    </div>
-                  </div>
-                  <MobileFieldGrid>
-                    <MobileField label="总数量" value={item.totalQuantity} />
-                    <MobileField label="记录数" value={item.records?.length || 0} align="right" />
-                  </MobileFieldGrid>
-                  <MobileActionBar>
-                    <button
-                      onClick={() => handleShowDetails(item.user, item.records)}
-                      className="inline-flex min-h-11 flex-1 items-center justify-center rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
-                    >
-                      查看详情
-                    </button>
-                    {isAdmin && (
-                      <button
-                        onClick={() => setExportUserId(item.user.id)}
-                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-100 px-3 py-2 text-sm font-medium text-emerald-600 hover:bg-emerald-50"
-                      >
-                        <Download className="h-4 w-4" />
-                        导出工资条
-                      </button>
-                    )}
-                  </MobileActionBar>
-                </MobileRecordCard>
-              ))}
-            </div>
-
-            <div className="border-t border-gray-200 bg-gray-50 px-4 py-4 md:px-6">
-              <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3 sm:gap-4">
-                <div>
-                  <div className="text-sm text-gray-500">总记录数</div>
-                  <div className="text-xl font-bold text-gray-900">{salaryReport.summary?.totalRecords || 0}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-500">总数量</div>
-                  <div className="text-xl font-bold text-gray-900">{salaryReport.summary?.totalQuantity || 0}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-500">总金额</div>
-                  <div className="text-xl font-bold text-blue-600">¥{formatAmount(salaryReport.summary?.totalAmount || 0)}</div>
-                </div>
+                      </DisclosureSection>
+                    </section>
+                  );
+                })}
               </div>
-            </div>
+            )}
           </div>
         )}
-      </div>
-
-      {selectedUserRecords && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex min-h-screen items-end justify-center px-0 pb-0 pt-4 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div
-                className="absolute inset-0 bg-gray-500 opacity-75"
-                onClick={() => setSelectedUserRecords(null)}
-              ></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block w-full transform overflow-hidden rounded-t-2xl bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl sm:rounded-lg sm:align-middle">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <h3 className="text-lg font-medium leading-6 text-gray-900">
-                    {selectedUserRecords.user.name} 的工资详情
-                  </h3>
-                  <button
-                    onClick={() => setSelectedUserRecords(null)}
-                    className="text-gray-400 hover:text-gray-500"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-
-                <div className="max-h-[65vh] overflow-y-auto">
-                  <table className="hidden min-w-[800px] w-full divide-y divide-gray-200 md:table">
-                    <thead className="sticky top-0 bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">入库单号</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">日期</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">产品</th>
-                        <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">单价</th>
-                        <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">数量</th>
-                        <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">金额</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 bg-white">
-                      {selectedUserRecords.records.map((record) => (
-                        <tr key={record.id}>
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-900">{record.recordNumber}</td>
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">{toDateKey(record.createdAt)}</td>
-                          <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                            {record.product?.name} ({record.product?.specification})
-                          </td>
-                          <td className="whitespace-nowrap px-6 py-4 text-right text-sm text-gray-500">
-                            ¥{formatUnitPrice(record.unitPrice)}
-                          </td>
-                          <td className="whitespace-nowrap px-6 py-4 text-right text-sm text-gray-500">{record.quantity}</td>
-                          <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium text-gray-900">
-                            ¥{formatAmount(record.totalAmount)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-gray-50 font-medium">
-                      <tr>
-                        <td colSpan={4} className="px-6 py-3 text-right text-gray-900">
-                          合计:
-                        </td>
-                        <td className="px-6 py-3 text-right text-gray-900">
-                          {selectedUserRecords.records.reduce((sum, record) => sum + Number(record.quantity || 0), 0)}
-                        </td>
-                        <td className="px-6 py-3 text-right text-blue-600">
-                          ¥
-                          {formatAmount(
-                            selectedUserRecords.records.reduce(
-                              (sum, record) => sum + Number(record.totalAmount || 0),
-                              0,
-                            ),
-                          )}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                  <div className="space-y-3 md:hidden">
-                    {selectedUserRecords.records.map((record) => (
-                      <MobileRecordCard key={record.id} className="shadow-none">
-                        <div className="mb-3 flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold text-gray-900">{record.recordNumber}</div>
-                            <div className="mt-1 text-xs text-gray-500">{toDateKey(record.createdAt)}</div>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <div className="text-xs text-gray-500">金额</div>
-                            <div className="text-base font-bold text-blue-600">¥{formatAmount(record.totalAmount)}</div>
-                          </div>
-                        </div>
-                        <MobileFieldGrid>
-                          <MobileField label="产品" value={`${record.product?.name || '-'} (${record.product?.specification || '-'})`} />
-                          <MobileField label="单价" value={`¥${formatUnitPrice(record.unitPrice)}`} align="right" />
-                          <MobileField label="数量" value={record.quantity} />
-                          <MobileField label="金额" value={`¥${formatAmount(record.totalAmount)}`} align="right" />
-                        </MobileFieldGrid>
-                      </MobileRecordCard>
-                    ))}
-                    <div className="rounded-xl bg-gray-50 p-4">
-                      <MobileFieldGrid>
-                        <MobileField
-                          label="合计数量"
-                          value={selectedUserRecords.records.reduce((sum, record) => sum + Number(record.quantity || 0), 0)}
-                        />
-                        <MobileField
-                          label="合计金额"
-                          value={`¥${formatAmount(
-                            selectedUserRecords.records.reduce(
-                              (sum, record) => sum + Number(record.totalAmount || 0),
-                              0,
-                            ),
-                          )}`}
-                          align="right"
-                        />
-                      </MobileFieldGrid>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
-                <button
-                  type="button"
-                  onClick={() => setSelectedUserRecords(null)}
-                  className="mt-3 inline-flex min-h-11 w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
-                >
-                  关闭
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
-      )}
+      </div>
 
       {printableSlip && (
         <ExportActionDialog
           title="导出工资条"
-          description={`为 ${printableSlip.user.name} 保存 PDF，或在手机端分享到微信。`}
+          description={`为 ${printableSlip.user.name} 生成 PDF 文件，可保存，或打开系统分享面板后选择微信。`}
           isProcessing={isExportingPdf}
           onSave={() => handleSalaryPdfExport('save')}
           onShare={() => handleSalaryPdfExport('share')}
@@ -690,32 +680,50 @@ const Salary: React.FC = () => {
                 <thead>
                   <tr>
                     <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">日期</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">入库单数</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">当日总数量</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">当日工资</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">入库单号</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">产品</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">规格</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">单位</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">数量</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">单价</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">金额</th>
                   </tr>
                 </thead>
                 <tbody>
                   {printableSlip.rows.length > 0 ? (
                     printableSlip.rows.map((row) => (
-                      <tr key={row.dateKey}>
+                      <tr key={row.id}>
                         <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.dateKey}</td>
-                        <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.recordCount}</td>
-                        <td className="border border-gray-900 px-3 py-3 text-right text-sm">{row.totalQuantity}</td>
+                        <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.recordNumber}</td>
+                        <td className="border border-gray-900 px-3 py-3 text-sm">{row.productName}</td>
+                        <td className="border border-gray-900 px-3 py-3 text-sm">{row.specification}</td>
+                        <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.unit}</td>
+                        <td className="border border-gray-900 px-3 py-3 text-right text-sm">{row.quantity}</td>
                         <td className="border border-gray-900 px-3 py-3 text-right text-sm">
-                          ¥{formatAmount(row.totalAmount)}
+                          ¥{formatUnitPrice(row.unitPrice)}
+                        </td>
+                        <td className="border border-gray-900 px-3 py-3 text-right text-sm">
+                          ¥{formatAmountDetail(row.totalAmount)}
                         </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={4} className="border border-gray-900 px-3 py-8 text-center text-sm text-gray-500">
+                      <td colSpan={8} className="border border-gray-900 px-3 py-8 text-center text-sm text-gray-500">
                         本期无记录
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
+            </section>
+
+            <section className="mt-10 grid grid-cols-2 gap-12 text-[14px] leading-10">
+              <div className="border-t border-gray-900 pt-3">员工确认签字：</div>
+              <div className="border-t border-gray-900 pt-3">财务复核：</div>
+            </section>
+            <section className="mt-6 border-t border-gray-900 pt-3 text-[14px] leading-8">
+              备注：
             </section>
           </div>
         </div>

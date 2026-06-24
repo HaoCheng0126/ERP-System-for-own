@@ -9,18 +9,15 @@ interface PageHeaderProps {
   };
 }
 
-const PageHeader: React.FC<PageHeaderProps> = ({ title, subtitle, action }) => {
+const PageHeader: React.FC<PageHeaderProps> = ({ title, action }) => {
   return (
-    <div className="border-b border-gray-200 bg-white px-4 py-4 md:px-8 md:py-6">
+    <div className="bg-white px-4 py-4 md:px-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="break-words text-xl font-bold text-gray-800 md:text-2xl">{title}</h1>
-          {subtitle && <p className="mt-1 break-words text-sm text-gray-500 md:text-base">{subtitle}</p>}
-        </div>
+        <h1 className="min-w-0 break-words text-xl font-semibold tracking-tight text-ink md:text-[22px]">{title}</h1>
         {action && (
           <button
             onClick={action.onClick}
-            className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-700 sm:w-auto"
+            className="inline-flex min-h-10 w-full items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-700 active:bg-brand-800 sm:w-auto"
           >
             {action.label}
           </button>

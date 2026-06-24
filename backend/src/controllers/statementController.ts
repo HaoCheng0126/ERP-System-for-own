@@ -1,11 +1,27 @@
 import { Response } from 'express';
 import { AppDataSource } from '../config/database';
-import { Statement, StatementPeriod, DeliveryOrder, Customer } from '../entities';
+import { Statement, StatementPeriod, Customer, CustomerType } from '../entities';
 import { AuthRequest } from '../middlewares/auth';
+import { accountingService } from '../services/accountingService';
 
 const statementRepository = AppDataSource.getRepository(Statement);
-const deliveryOrderRepository = AppDataSource.getRepository(DeliveryOrder);
 const customerRepository = AppDataSource.getRepository(Customer);
+
+export const getReconciliation = async (req: AuthRequest, res: Response) => {
+  try {
+    const { startDate, endDate, customerId, type, activityScope } = req.query;
+    const reconciliation = await accountingService.getReconciliation({
+      startDate: typeof startDate === 'string' ? startDate : undefined,
+      endDate: typeof endDate === 'string' ? endDate : undefined,
+      customerId: typeof customerId === 'string' ? customerId : undefined,
+      type: type === CustomerType.CLIENT || type === CustomerType.SUPPLIER ? type : 'all',
+      activityScope: activityScope === 'active' || activityScope === 'balance' ? activityScope : 'all',
+    });
+    res.json(reconciliation);
+  } catch (error) {
+    res.status(500).json({ message: '服务器错误' });
+  }
+};
 
 export const getStatements = async (req: AuthRequest, res: Response) => {
   try {
@@ -26,7 +42,7 @@ export const getStatements = async (req: AuthRequest, res: Response) => {
     const statements = await queryBuilder.getMany();
     res.json(statements);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -39,13 +55,15 @@ export const createStatement = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: '客户不存在' });
     }
 
-    const deliveryOrders = await deliveryOrderRepository
-      .createQueryBuilder('order')
-      .where('order.customerId = :customerId', { customerId })
-      .andWhere('order.deliveryDate BETWEEN :startDate AND :endDate', { startDate, endDate })
-      .getMany();
-
-    const totalAmount = deliveryOrders.reduce((sum, order) => sum + Number(order.totalAmount), 0);
+    const reconciliation = await accountingService.getReconciliation({
+      customerId,
+      startDate,
+      endDate,
+      type: customer.type,
+      activityScope: 'all',
+    });
+    const group = reconciliation[0];
+    const totalAmount = group?.periodBusiness || 0;
 
     const statement = statementRepository.create({
       customerId,
@@ -66,9 +84,9 @@ export const createStatement = async (req: AuthRequest, res: Response) => {
     res.status(201).json({ 
       message: '对账单生成成功', 
       statement: savedStatement,
-      deliveryOrders,
+      reconciliation: group,
     });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

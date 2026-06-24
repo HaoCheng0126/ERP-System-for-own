@@ -1,8 +1,26 @@
 import type { Repository } from 'typeorm/repository/Repository';
 import { AppDataSource } from '../config/database';
-import { Customer, CustomerType, PaymentMethod, PaymentRecord, PurchaseOrder, PurchaseOrderStatus } from '../entities';
+import {
+  Customer,
+  CustomerType,
+  PaymentMethod,
+  PaymentRecord,
+  Product,
+  ProductType,
+  PurchaseOrder,
+  PurchaseOrderStatus,
+} from '../entities';
+import type { EntityManager } from '../lib/typeorm';
 import { AppError } from '../utils/AppError';
 import { roundLineAmount, roundQuantity, roundUnitPrice } from '../utils/decimal';
+import { createProductWithManager } from '../controllers/productController';
+
+type NewRawMaterialDraft = {
+  name?: string;
+  specification?: string;
+  unit?: string;
+  costPrice?: number;
+};
 
 type PurchasePayload = Partial<PurchaseOrder>;
 
@@ -18,6 +36,7 @@ export class PurchaseService {
   private purchaseRepository = AppDataSource.getRepository(PurchaseOrder);
   private customerRepository = AppDataSource.getRepository(Customer);
   private paymentRepository = AppDataSource.getRepository(PaymentRecord);
+  private productRepository = AppDataSource.getRepository(Product);
 
   private async findSupplier(supplierId: string) {
     const supplier = await this.customerRepository.findOne({
@@ -53,6 +72,35 @@ export class PurchaseService {
     };
   }
 
+  private async findRawMaterial(productId: string, manager?: EntityManager) {
+    const repository = manager ? manager.getRepository(Product) : this.productRepository;
+    const product = await repository.findOne({
+      where: { id: productId, isActive: true, type: ProductType.RAW_MATERIAL },
+    });
+
+    if (!product) {
+      throw new AppError('原材料不存在或已停用', 400);
+    }
+
+    return product;
+  }
+
+  private async adjustRawMaterialStock(
+    manager: EntityManager,
+    productId: string,
+    deltaQuantity: number,
+    errorMessage = '原材料库存不足，无法完成当前操作',
+  ) {
+    const product = await this.findRawMaterial(productId, manager);
+    const nextStock = roundQuantity((Number(product.stock) || 0) + Number(deltaQuantity));
+    if (nextStock < 0) {
+      throw new AppError(errorMessage, 400);
+    }
+
+    product.stock = nextStock;
+    await manager.save(product);
+  }
+
   private async migrateLegacyPaidAmountIfNeeded(
     purchase: PurchaseOrder,
     supplier: Customer,
@@ -80,38 +128,59 @@ export class PurchaseService {
 
   async create(data: PurchasePayload) {
     const purchaseDate = normalizeString(data.purchaseDate);
-    const item = normalizeString(data.item);
     const supplierId = normalizeString(data.supplierId);
-    const unit = normalizeString(data.unit) || '个';
+    const productId = normalizeString((data as any).productId);
+    const newProduct = (data as any).newProduct as NewRawMaterialDraft | undefined;
     const remark = normalizeString(data.remark);
 
-    if (!purchaseDate || !item || !supplierId) {
+    if (!purchaseDate || !supplierId || (!productId && !newProduct)) {
       throw new AppError('缺少必填字段', 400);
     }
 
-    const supplier = await this.findSupplier(supplierId);
-    const normalizedNumbers = this.normalizePurchaseNumbers(data.quantity, data.unitPrice);
+    return AppDataSource.transaction(async (manager) => {
+      const supplier = await this.findSupplier(supplierId);
+      const product = productId
+        ? await this.findRawMaterial(productId, manager)
+        : await createProductWithManager(manager, {
+            name: normalizeString(newProduct?.name),
+            specification: normalizeString(newProduct?.specification),
+            unit: normalizeString(newProduct?.unit),
+            costPrice: Number(newProduct?.costPrice) || 0,
+            type: ProductType.RAW_MATERIAL,
+          });
+      const normalizedNumbers = this.normalizePurchaseNumbers(data.quantity, data.unitPrice);
+      const item = normalizeString(data.item) || `${product.name}${product.specification ? ` ${product.specification}` : ''}`;
+      const unit = normalizeString(data.unit) || product.unit || '个';
 
-    const purchase = this.purchaseRepository.create({
-      purchaseDate,
-      supplierId: supplier.id,
-      supplier: supplier.name,
-      item,
-      unit,
-      quantity: normalizedNumbers.quantity,
-      unitPrice: normalizedNumbers.unitPrice,
-      amount: normalizedNumbers.amount,
-      paidAmount: 0,
-      status: PurchaseOrderStatus.PENDING,
-      remark: remark || null,
+      const purchase = manager.create(PurchaseOrder, {
+        purchaseDate,
+        supplierId: supplier.id,
+        supplier: supplier.name,
+        productId: product.id,
+        item,
+        unit,
+        quantity: normalizedNumbers.quantity,
+        unitPrice: normalizedNumbers.unitPrice,
+        amount: normalizedNumbers.amount,
+        paidAmount: 0,
+        status: PurchaseOrderStatus.PENDING,
+        stockApplied: true,
+        remark: remark || null,
+      });
+
+      await manager.save(purchase);
+      await this.adjustRawMaterialStock(manager, product.id, Number(normalizedNumbers.quantity));
+
+      return manager.findOne(PurchaseOrder, {
+        where: { id: purchase.id },
+        relations: ['supplierEntity', 'product'],
+      });
     });
-
-    return this.purchaseRepository.save(purchase);
   }
 
   async findAll() {
     return this.purchaseRepository.find({
-      relations: ['supplierEntity'],
+      relations: ['supplierEntity', 'product'],
       order: { purchaseDate: 'DESC', createdAt: 'DESC' },
     });
   }
@@ -119,7 +188,7 @@ export class PurchaseService {
   async findOne(id: string) {
     const purchase = await this.purchaseRepository.findOne({
       where: { id },
-      relations: ['supplierEntity'],
+      relations: ['supplierEntity', 'product'],
     });
 
     if (!purchase) {
@@ -132,12 +201,12 @@ export class PurchaseService {
   async update(id: string, data: PurchasePayload) {
     const purchase = await this.findOne(id);
     const purchaseDate = normalizeString(data.purchaseDate) || purchase.purchaseDate;
-    const item = normalizeString(data.item) || purchase.item;
-    const unit = normalizeString(data.unit) || purchase.unit || '个';
     const nextSupplierId = normalizeString(data.supplierId) || purchase.supplierId || '';
+    const nextProductId = normalizeString((data as any).productId);
+    const newProduct = (data as any).newProduct as NewRawMaterialDraft | undefined;
     const remark = data.remark !== undefined ? normalizeString(data.remark) : purchase.remark;
 
-    if (!purchaseDate || !item || !nextSupplierId) {
+    if (!purchaseDate || !nextSupplierId) {
       throw new AppError('缺少必填字段', 400);
     }
 
@@ -151,11 +220,44 @@ export class PurchaseService {
       const transactionPurchaseRepository = manager.getRepository(PurchaseOrder);
       const transactionPaymentRepository = manager.getRepository(PaymentRecord);
 
+      if (purchase.stockApplied && purchase.productId) {
+        await this.adjustRawMaterialStock(
+          manager,
+          purchase.productId,
+          -Number(purchase.quantity),
+          '原材料库存不足，无法修改该进货记录',
+        );
+      }
+
+      const nextProduct = newProduct
+        ? await createProductWithManager(manager, {
+            name: normalizeString(newProduct?.name),
+            specification: normalizeString(newProduct?.specification),
+            unit: normalizeString(newProduct?.unit),
+            costPrice: Number(newProduct?.costPrice) || 0,
+            type: ProductType.RAW_MATERIAL,
+          })
+        : nextProductId
+          ? await this.findRawMaterial(nextProductId, manager)
+          : null;
+
+      const item =
+        normalizeString(data.item) ||
+        (nextProduct
+          ? `${nextProduct.name}${nextProduct.specification ? ` ${nextProduct.specification}` : ''}`
+          : purchase.item);
+      const unit = normalizeString(data.unit) || nextProduct?.unit || purchase.unit || '个';
+
+      if (!item) {
+        throw new AppError('缺少必填字段', 400);
+      }
+
       purchase.purchaseDate = purchaseDate;
       purchase.item = item;
       purchase.unit = unit;
       purchase.supplierId = supplier.id;
       purchase.supplier = supplier.name;
+      purchase.productId = nextProduct?.id || purchase.productId || null;
       purchase.quantity = normalizedNumbers.quantity;
       purchase.unitPrice = normalizedNumbers.unitPrice;
       purchase.amount = normalizedNumbers.amount;
@@ -168,16 +270,38 @@ export class PurchaseService {
         transactionPaymentRepository,
       );
 
-      return transactionPurchaseRepository.save(purchase);
+      if (purchase.productId) {
+        await this.adjustRawMaterialStock(manager, purchase.productId, Number(purchase.quantity));
+        purchase.stockApplied = true;
+      }
+
+      await transactionPurchaseRepository.save(purchase);
+      return transactionPurchaseRepository.findOne({
+        where: { id: purchase.id },
+        relations: ['supplierEntity', 'product'],
+      });
     });
   }
 
   async delete(id: string) {
-    const result = await this.purchaseRepository.delete(id);
-    if (result.affected === 0) {
-      throw new AppError('采购记录不存在', 404);
-    }
-    return true;
+    return AppDataSource.transaction(async (manager) => {
+      const purchase = await manager.findOne(PurchaseOrder, { where: { id } });
+      if (!purchase) {
+        throw new AppError('采购记录不存在', 404);
+      }
+
+      if (purchase.stockApplied && purchase.productId) {
+        await this.adjustRawMaterialStock(
+          manager,
+          purchase.productId,
+          -Number(purchase.quantity),
+          '原材料库存不足，无法删除该进货记录',
+        );
+      }
+
+      await manager.delete(PurchaseOrder, { id });
+      return true;
+    });
   }
 }
 

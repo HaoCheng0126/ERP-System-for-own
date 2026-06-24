@@ -1,12 +1,20 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Edit, Save, Trash2, Users, X } from 'lucide-react';
 import ActionableEmptyState from '../components/ActionableEmptyState';
+import FilterPanel, { ActiveFilter, FilterField, SearchInput } from '../components/FilterPanel';
 import QueryStateBanner from '../components/QueryStateBanner';
 import Layout from '../components/Layout';
+import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import api from '../utils/api';
+import { formatAmount } from '../utils/format';
+import { isNonZeroAmount, matchesKeyword } from '../utils/filtering';
+import useDebouncedValue from '../hooks/useDebouncedValue';
 import { Customer, CustomerType } from '../types';
+import { useCounterparties } from '../hooks/useCounterparties';
+
+type BalanceFilter = 'all' | 'hasBalance' | 'noBalance';
 
 const Customers: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
@@ -16,31 +24,80 @@ const Customers: React.FC = () => {
     address: '',
     contactPerson: '',
     phone: '',
+    initialBalance: 0,
     group: '',
     type: CustomerType.CLIENT,
   });
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>('all');
   const [newGroupName, setNewGroupName] = useState<string>('');
   const [showNewGroupInput, setShowNewGroupInput] = useState(false);
+  const debouncedSearchTerm = useDebouncedValue(searchTerm);
 
   const queryClient = useQueryClient();
 
-  const { data: customers, isLoading, error, refetch } = useQuery({
-    queryKey: ['customers'],
-    queryFn: async () => {
-      const response = await api.get('/customers');
-      return response.data;
-    },
-  });
+  const { data: customers, isLoading, error, refetch } = useCounterparties();
 
   const groups = Array.from(new Set(customers?.map((c: Customer) => c.group).filter(Boolean))) as string[];
 
   const filteredCustomers = customers?.filter((customer: Customer) => {
     const groupMatch = selectedGroup === 'all' || customer.group === selectedGroup;
     const typeMatch = selectedType === 'all' || customer.type === selectedType;
-    return groupMatch && typeMatch;
+    const balanceValue = Number(customer.initialBalance || 0);
+    const balanceMatch =
+      balanceFilter === 'all' ||
+      (balanceFilter === 'hasBalance' && isNonZeroAmount(balanceValue)) ||
+      (balanceFilter === 'noBalance' && !isNonZeroAmount(balanceValue));
+    const keywordMatch = matchesKeyword(debouncedSearchTerm, [
+      customer.code,
+      customer.name,
+      customer.contactPerson,
+      customer.phone,
+      customer.address,
+      customer.group,
+    ]);
+    return groupMatch && typeMatch && balanceMatch && keywordMatch;
   });
+
+  const clearFilters = () => {
+    setSelectedType('all');
+    setSelectedGroup('all');
+    setSearchTerm('');
+    setBalanceFilter('all');
+  };
+
+  const activeFilters: ActiveFilter[] = [
+    searchTerm
+      ? {
+          key: 'keyword',
+          label: `关键词: ${searchTerm}`,
+          onRemove: () => setSearchTerm(''),
+        }
+      : null,
+    selectedType !== 'all'
+      ? {
+          key: 'type',
+          label: `类型: ${selectedType === CustomerType.CLIENT ? '客户' : '供应商'}`,
+          onRemove: () => setSelectedType('all'),
+        }
+      : null,
+    selectedGroup !== 'all'
+      ? {
+          key: 'group',
+          label: `分组: ${selectedGroup}`,
+          onRemove: () => setSelectedGroup('all'),
+        }
+      : null,
+    balanceFilter !== 'all'
+      ? {
+          key: 'balance',
+          label: `结余: ${balanceFilter === 'hasBalance' ? '有结余' : '无结余'}`,
+          onRemove: () => setBalanceFilter('all'),
+        }
+      : null,
+  ].filter((item): item is ActiveFilter => Boolean(item));
 
   const addCustomerMutation = useMutation({
     mutationFn: async (customer: typeof newCustomer) => {
@@ -55,6 +112,7 @@ const Customers: React.FC = () => {
         address: '',
         contactPerson: '',
         phone: '',
+        initialBalance: 0,
         group: '',
         type: CustomerType.CLIENT,
       });
@@ -121,7 +179,7 @@ const Customers: React.FC = () => {
         action={{ label: '添加客户/供应商', onClick: () => setShowAddModal(true) }}
       />
       
-      <div className="p-8">
+      <div className="px-4 pb-4 pt-0 md:px-6 md:pb-6">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -129,32 +187,63 @@ const Customers: React.FC = () => {
           errorText="客户资料暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="mb-4 flex items-center space-x-4 flex-wrap gap-2">
-          <label className="text-sm font-medium text-gray-700">类型筛选:</label>
-          <select
-            value={selectedType}
-            onChange={(e) => setSelectedType(e.target.value)}
-            className="pl-3 pr-10 py-2 text-sm border border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-md"
-          >
-            <option value="all">全部</option>
-            <option value={CustomerType.CLIENT}>客户</option>
-            <option value={CustomerType.SUPPLIER}>供应商</option>
-          </select>
-          
-          <label className="text-sm font-medium text-gray-700 ml-4">分组筛选:</label>
-          <select
-            value={selectedGroup}
-            onChange={(e) => setSelectedGroup(e.target.value)}
-            className="pl-3 pr-10 py-2 text-sm border border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-md"
-          >
-            <option value="all">全部</option>
-            {groups.map((group) => (
-              <option key={group} value={group}>{group}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+          <FilterPanel
+            totalCount={(customers || []).length}
+            filteredCount={(filteredCustomers || []).length}
+            activeFilters={activeFilters}
+            onClear={clearFilters}
+            desktopInlineAdvanced
+            primary={
+              <>
+                <FilterField label="关键词" className="lg:w-64">
+                  <SearchInput
+                    value={searchTerm}
+                    onChange={setSearchTerm}
+                    placeholder="客户编号、名称、联系人、电话"
+                  />
+                </FilterField>
+                <FilterField label="类型" className="lg:w-40">
+                  <select
+                    value={selectedType}
+                    onChange={(e) => setSelectedType(e.target.value)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="all">全部</option>
+                    <option value={CustomerType.CLIENT}>客户</option>
+                    <option value={CustomerType.SUPPLIER}>供应商</option>
+                  </select>
+                </FilterField>
+              </>
+            }
+            advanced={
+              <>
+                <FilterField label="分组" className="lg:w-40">
+                  <select
+                    value={selectedGroup}
+                    onChange={(e) => setSelectedGroup(e.target.value)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="all">全部</option>
+                    {groups.map((group) => (
+                      <option key={group} value={group}>{group}</option>
+                    ))}
+                  </select>
+                </FilterField>
+                <FilterField label="结余款项" className="lg:w-40">
+                  <select
+                    value={balanceFilter}
+                    onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                  >
+                    <option value="all">全部</option>
+                    <option value="hasBalance">有结余</option>
+                    <option value="noBalance">无结余</option>
+                  </select>
+                </FilterField>
+              </>
+            }
+          />
           {!isLoading && (filteredCustomers || []).length === 0 ? (
             <div className="p-6">
               <ActionableEmptyState
@@ -164,8 +253,7 @@ const Customers: React.FC = () => {
                 actionLabel={customers?.length ? '查看全部' : '添加客户'}
                 onAction={() => {
                   if (customers?.length) {
-                    setSelectedType('all');
-                    setSelectedGroup('all');
+                    clearFilters();
                     return;
                   }
                   setShowAddModal(true);
@@ -173,7 +261,8 @@ const Customers: React.FC = () => {
               />
             </div>
           ) : (filteredCustomers || []).length > 0 ? (
-          <div className="overflow-x-auto">
+          <>
+          <div className="hidden overflow-x-auto md:block">
             <table className="min-w-[800px] w-full">
               <thead className="bg-gray-50">
                 <tr>
@@ -183,6 +272,7 @@ const Customers: React.FC = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分组</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">联系人</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">电话</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">结余款项</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">地址</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
@@ -241,6 +331,15 @@ const Customers: React.FC = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <input
+                            type="number"
+                            step="0.01"
+                            value={editingCustomer.initialBalance ?? 0}
+                            onChange={(e) => setEditingCustomer({ ...editingCustomer, initialBalance: Number(e.target.value || 0) })}
+                            className="w-32 px-3 py-2 text-right border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <input
                             type="text"
                             value={editingCustomer.address}
                             onChange={(e) => setEditingCustomer({ ...editingCustomer, address: e.target.value })}
@@ -282,6 +381,7 @@ const Customers: React.FC = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">{customer.contactPerson || '-'}</td>
                         <td className="px-6 py-4 whitespace-nowrap">{customer.phone || '-'}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right font-medium text-gray-900">¥{formatAmount(customer.initialBalance || 0)}</td>
                         <td className="px-6 py-4 whitespace-nowrap">{customer.address || '-'}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <button
@@ -304,13 +404,122 @@ const Customers: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <div className="space-y-3 p-4 md:hidden">
+            {(filteredCustomers || []).map((customer: Customer) => (
+              <MobileRecordCard key={customer.id}>
+                {editingCustomer?.id === customer.id ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 gap-3">
+                      <input
+                        type="text"
+                        value={editingCustomer.name}
+                        onChange={(e) => setEditingCustomer({ ...editingCustomer, name: e.target.value })}
+                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="名称"
+                      />
+                      <select
+                        value={editingCustomer.type}
+                        onChange={(e) => setEditingCustomer({ ...editingCustomer, type: e.target.value as CustomerType })}
+                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      >
+                        <option value={CustomerType.CLIENT}>客户</option>
+                        <option value={CustomerType.SUPPLIER}>供应商</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={editingCustomer.contactPerson}
+                        onChange={(e) => setEditingCustomer({ ...editingCustomer, contactPerson: e.target.value })}
+                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="联系人"
+                      />
+                      <input
+                        type="text"
+                        value={editingCustomer.phone}
+                        onChange={(e) => setEditingCustomer({ ...editingCustomer, phone: e.target.value })}
+                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="电话"
+                      />
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={editingCustomer.initialBalance ?? 0}
+                        onChange={(e) => setEditingCustomer({ ...editingCustomer, initialBalance: Number(e.target.value || 0) })}
+                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-right text-sm"
+                        placeholder="结余款项"
+                      />
+                      <input
+                        type="text"
+                        value={editingCustomer.address}
+                        onChange={(e) => setEditingCustomer({ ...editingCustomer, address: e.target.value })}
+                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="地址"
+                      />
+                    </div>
+                    <MobileActionBar>
+                      <button
+                        onClick={handleUpdateCustomer}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-green-100 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50"
+                      >
+                        <Save className="h-4 w-4" />
+                        保存
+                      </button>
+                      <button
+                        onClick={() => setEditingCustomer(null)}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        <X className="h-4 w-4" />
+                        取消
+                      </button>
+                    </MobileActionBar>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-base font-semibold text-gray-900">{customer.name}</div>
+                        <div className="mt-1 text-sm text-gray-500">{customer.code} · {customer.group || '默认'}</div>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${
+                        customer.type === CustomerType.CLIENT ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                      }`}>
+                        {typeLabels[customer.type]}
+                      </span>
+                    </div>
+                    <MobileFieldGrid>
+                      <MobileField label="联系人" value={customer.contactPerson || '-'} />
+                      <MobileField label="电话" value={customer.phone || '-'} align="right" />
+                      <MobileField label="结余款项" value={`¥${formatAmount(customer.initialBalance || 0)}`} />
+                      <MobileField label="地址" value={customer.address || '-'} align="right" />
+                    </MobileFieldGrid>
+                    <MobileActionBar>
+                      <button
+                        onClick={() => setEditingCustomer(customer)}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                      >
+                        <Edit className="h-4 w-4" />
+                        编辑
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCustomer(customer.id)}
+                        className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        删除
+                      </button>
+                    </MobileActionBar>
+                  </>
+                )}
+              </MobileRecordCard>
+            ))}
+          </div>
+          </>
           ) : null}
         </div>
       </div>
 
       {showAddModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-gray-600 bg-opacity-50 sm:items-center sm:p-4">
+          <div className="relative max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border bg-white p-5 shadow-lg sm:max-w-md sm:rounded-lg">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-gray-900">添加客户/供应商</h3>
               <button
@@ -400,6 +609,16 @@ const Customers: React.FC = () => {
                   value={newCustomer.phone}
                   onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">结余款项</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={newCustomer.initialBalance ?? 0}
+                  onChange={(e) => setNewCustomer({ ...newCustomer, initialBalance: Number(e.target.value || 0) })}
+                  className="mt-1 block w-full px-3 py-2 text-right border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 />
               </div>
               <div>

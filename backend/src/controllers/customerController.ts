@@ -19,7 +19,7 @@ export const getCustomers = async (req: AuthRequest, res: Response) => {
     });
     res.json(customers);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -34,7 +34,7 @@ export const getCustomerById = async (req: AuthRequest, res: Response) => {
 
     res.json(customer);
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -48,7 +48,7 @@ export const createCustomer = async (req: AuthRequest, res: Response) => {
     await customerRepository.save(customer);
     res.status(201).json({ message: '客户创建成功', customer });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -65,7 +65,7 @@ export const updateCustomer = async (req: AuthRequest, res: Response) => {
     await customerRepository.save(customer);
     res.json({ message: '客户更新成功', customer });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -88,6 +88,6 @@ export const deleteCustomer = async (req: AuthRequest, res: Response) => {
     await customerRepository.save(customer);
     res.json({ message: '客户已删除' });
   } catch (error) {
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

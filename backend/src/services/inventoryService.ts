@@ -4,16 +4,20 @@ import {
   InventoryRecordStatus,
   InventoryRecordSubmissionMode,
   Product,
+  ProductType,
   User,
   UserRole,
 } from '../entities';
 import type { EntityManager } from '../lib/typeorm';
 import { AppError } from '../utils/AppError';
 import { roundLineAmount, roundQuantity, roundUnitPrice } from '../utils/decimal';
+import { createProductWithManager } from '../controllers/productController';
 
 type InventoryRecordItemInput = {
-  productId: string;
+  productId?: string;
   quantity: number;
+  newProduct?: { name: string; specification: string; unit: string; costPrice?: number };
+  costPriceOverride?: number;
 };
 
 type CreateInventoryRecordInput = {
@@ -182,13 +186,157 @@ export class InventoryService {
       const results = [];
 
       for (const [index, item] of data.records.entries()) {
+        const resolved = await this.resolveRecordItem(item, manager);
         const recordNumber = this.formatRecordNumber(context.createdAt, userCodeDigits, count + index + 1);
-        const result = await this.createSingleRecord(context, item, manager, recordNumber);
+        const result = await this.createSingleRecord(context, resolved, manager, recordNumber);
         results.push(result);
       }
 
       return results;
     });
+  }
+
+  // 解析单条入库明细的产品：支持内联新建产品，及对「无成本单价」的产品补填单价并写回产品资料。
+  private async resolveRecordItem(
+    item: InventoryRecordItemInput,
+    manager: EntityManager,
+  ): Promise<{ productId: string; quantity: number }> {
+    if (item.newProduct) {
+      const product = await createProductWithManager(manager, {
+        name: item.newProduct.name,
+        specification: item.newProduct.specification,
+        unit: item.newProduct.unit,
+        type: ProductType.FINISHED,
+        costPrice: item.newProduct.costPrice,
+        stock: 0,
+      });
+      return { productId: product.id, quantity: item.quantity };
+    }
+
+    if (!item.productId) {
+      throw new AppError('产品ID和数量为必填项', 400);
+    }
+
+    if (item.costPriceOverride !== undefined) {
+      const product = await this.getProductOrThrow(item.productId, manager);
+      const currentCost = Number(product.costPrice) || 0;
+      const override = roundUnitPrice(item.costPriceOverride);
+      if (currentCost === 0 && override > 0) {
+        product.costPrice = override;
+        await manager.save(product);
+      }
+    }
+
+    return { productId: item.productId, quantity: item.quantity };
+  }
+
+  // 在调用方事务内创建「管理员分配 + 已审批」的入库单（增加库存且计入计件工资）。
+  // 供送货单「现场分配入库」复用；同一员工多笔分配时按提交人递增编号避免冲突。
+  async createApprovedRecordsWithManager(
+    manager: EntityManager,
+    actorId: string,
+    allocations: { submittedBy: string; productId: string; quantity: number }[],
+  ): Promise<InventoryRecord[]> {
+    const createdAt = new Date();
+    const results: InventoryRecord[] = [];
+    const sequenceBySubmitter = new Map<string, { digits: string; next: number }>();
+
+    for (const allocation of allocations) {
+      const submitter = await this.getSubmitterOrThrow(allocation.submittedBy, manager);
+      if (submitter.role !== UserRole.PIECE_RATE) {
+        throw new AppError('只能分配给计件员工', 400);
+      }
+
+      let sequence = sequenceBySubmitter.get(allocation.submittedBy);
+      if (!sequence) {
+        const digits = await this.getUserCodeDigits(allocation.submittedBy, manager);
+        const count = await this.getDailyRecordCount(allocation.submittedBy, manager, createdAt);
+        sequence = { digits, next: count + 1 };
+        sequenceBySubmitter.set(allocation.submittedBy, sequence);
+      }
+      const recordNumber = this.formatRecordNumber(createdAt, sequence.digits, sequence.next);
+      sequence.next += 1;
+
+      const context: CreateInventoryContext = {
+        actorId,
+        submittedBy: allocation.submittedBy,
+        submissionMode: InventoryRecordSubmissionMode.ADMIN_ASSIGN,
+        status: InventoryRecordStatus.APPROVED,
+        reviewedBy: actorId,
+        reviewedAt: createdAt,
+        createdAt,
+      };
+
+      const record = await this.createSingleRecord(
+        context,
+        { productId: allocation.productId, quantity: allocation.quantity },
+        manager,
+        recordNumber,
+      );
+      if (record) {
+        results.push(record);
+      }
+    }
+
+    return results;
+  }
+
+  // 退货扣款：在调用方事务内，为指定员工生成「负数、已审批、不动库存」的入库记录。
+  // 当天日期 → 计入本月工资（实时重算自动扣减），不改历史月；只影响工资，库存由退货行的 restock 单独处理。
+  async createReturnDeductionRecords(
+    manager: EntityManager,
+    actorId: string,
+    deductions: { employeeId: string; productId: string; quantity: number; remark?: string | null }[],
+  ): Promise<InventoryRecord[]> {
+    const createdAt = new Date();
+    const results: InventoryRecord[] = [];
+    const sequenceBySubmitter = new Map<string, { digits: string; next: number }>();
+
+    for (const deduction of deductions) {
+      const submitter = await this.getSubmitterOrThrow(deduction.employeeId, manager);
+      if (submitter.role !== UserRole.PIECE_RATE) {
+        throw new AppError('只能扣计件员工的工资', 400);
+      }
+
+      const product = await this.getProductOrThrow(deduction.productId, manager);
+      const deductQty = roundQuantity(deduction.quantity);
+      if (deductQty <= 0) {
+        throw new AppError('退货扣款数量必须大于0', 400);
+      }
+      const unitPrice = roundUnitPrice(product.costPrice);
+      const totalAmount = -roundLineAmount(deductQty, unitPrice);
+
+      let sequence = sequenceBySubmitter.get(deduction.employeeId);
+      if (!sequence) {
+        const digits = await this.getUserCodeDigits(deduction.employeeId, manager);
+        const count = await this.getDailyRecordCount(deduction.employeeId, manager, createdAt);
+        sequence = { digits, next: count + 1 };
+        sequenceBySubmitter.set(deduction.employeeId, sequence);
+      }
+      const recordNumber = this.formatRecordNumber(createdAt, sequence.digits, sequence.next);
+      sequence.next += 1;
+
+      const record = manager.create(InventoryRecord, {
+        recordNumber,
+        productId: deduction.productId,
+        submittedBy: deduction.employeeId,
+        quantity: -deductQty,
+        unitPrice,
+        totalAmount,
+        status: InventoryRecordStatus.APPROVED,
+        submissionMode: InventoryRecordSubmissionMode.RETURN_DEDUCTION,
+        reviewedBy: actorId,
+        reviewedAt: createdAt,
+        remark: this.normalizeRemark(deduction.remark) ?? null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      await manager.save(record);
+      // 故意不调用 adjustProductStock —— 退货扣款只记工资，不动库存。
+      results.push(record);
+    }
+
+    return results;
   }
 
   private async createSingleRecord(
@@ -366,6 +514,10 @@ export class InventoryService {
         throw new AppError('入库单不存在', 404);
       }
 
+      if (record.submissionMode === InventoryRecordSubmissionMode.RETURN_DEDUCTION) {
+        throw new AppError('退货扣款记录只能通过删除对应退货单撤销', 400);
+      }
+
       if (role !== UserRole.ADMIN) {
         if (record.submittedBy !== userId) {
           throw new AppError('无权修改此入库单', 403);
@@ -443,6 +595,10 @@ export class InventoryService {
       const record = await manager.findOne(InventoryRecord, { where: { id } });
       if (!record) {
         throw new AppError('入库单不存在', 404);
+      }
+
+      if (record.submissionMode === InventoryRecordSubmissionMode.RETURN_DEDUCTION) {
+        throw new AppError('退货扣款记录只能通过删除对应退货单撤销', 400);
       }
 
       if (role !== UserRole.ADMIN) {

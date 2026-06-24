@@ -11,7 +11,7 @@ export const getInventoryRecords = async (req: AuthRequest, res: Response) => {
     res.json(records);
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -22,7 +22,7 @@ export const getInventoryRecordById = async (req: AuthRequest, res: Response) =>
     res.json(record);
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -42,7 +42,7 @@ export const createInventoryRecord = async (req: AuthRequest, res: Response) => 
     });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -53,7 +53,7 @@ export const reviewInventoryRecord = async (req: AuthRequest, res: Response) => 
     res.json({ message: '审核完成', record });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -68,7 +68,7 @@ export const reviewInventoryRecordsBatch = async (req: AuthRequest, res: Respons
     res.json({ message: `已批量处理 ${records.length} 条入库单`, records });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '批量审核失败', error });
+    res.status(500).json({ message: '批量审核失败' });
   }
 };
 
@@ -82,7 +82,7 @@ export const updateInventoryRecord = async (req: AuthRequest, res: Response) => 
     });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -93,6 +93,6 @@ export const deleteInventoryRecord = async (req: AuthRequest, res: Response) => 
     res.json({ message: '入库单已删除' });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
-    res.status(500).json({ message: '服务器错误', error });
+    res.status(500).json({ message: '服务器错误' });
   }
 };

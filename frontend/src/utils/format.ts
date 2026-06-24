@@ -37,6 +37,12 @@ export const formatUnitPrice = (value: number | string | null | undefined) => {
   return formatDisplayDecimal(value, 4);
 };
 
+// 概览/列表/汇总用：金额内部按 4 位小数存储，但对外展示四舍五入到 2 位。
 export const formatAmount = (value: number | string | null | undefined) => {
+  return formatDisplayDecimal(value, 2);
+};
+
+// 详情/明细用：展示完整的 4 位小数精度（单价可能是 4 位小数，金额=数量×单价）。
+export const formatAmountDetail = (value: number | string | null | undefined) => {
   return formatDisplayDecimal(value, 4);
 };

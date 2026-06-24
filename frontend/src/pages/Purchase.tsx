@@ -1,36 +1,49 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Download, Edit, Trash2, X } from 'lucide-react';
+import { Edit, Trash2, X } from 'lucide-react';
 import DateField from '../components/DateField';
 import ExportActionDialog from '../components/ExportActionDialog';
+import FilterPanel, { ActiveFilter, DateShortcutGroup, FilterField, SearchInput } from '../components/FilterPanel';
 import Layout from '../components/Layout';
 import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import QueryStateBanner from '../components/QueryStateBanner';
-import { Customer, CustomerType, PurchaseOrder } from '../types';
-import { formatAmount, formatDisplayDecimal, formatEditableDecimal, formatUnitPrice } from '../utils/format';
+import ProductAutocomplete from '../components/ProductAutocomplete';
+import QuickCreateProductForm, { QuickCreateProductDraft } from '../components/QuickCreateProductForm';
+import { CustomerType, Product, PurchaseOrder } from '../types';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatEditableDecimal, formatUnitPrice } from '../utils/format';
 import { getPurchaseAmount, groupPurchases } from '../utils/purchaseGrouping';
+import { DateRangeShortcut, getDateRangeByShortcut, matchesKeyword } from '../utils/filtering';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+import { useCounterparties } from '../hooks/useCounterparties';
 import api from '../utils/api';
-import { createPdfFileFromElement, downloadPdfFile, sharePdfFile, toSafePdfFileName } from '../utils/printShare';
+import { exportPrintable, getShareFallbackMessage, toSafePdfFileName } from '../utils/printShare';
+import DisclosureSection from '../components/records/DisclosureSection';
+import DateSectionHeader from '../components/records/DateSectionHeader';
+import EntityCardHeader from '../components/records/EntityCardHeader';
 
 type PurchaseFormState = {
   purchaseDate: string;
   supplierId: string;
+  productId: string;
   item: string;
   quantity: string | number;
   unit: string;
   unitPrice: string | number;
   remark: string;
+  newProduct?: QuickCreateProductDraft | null;
 };
 
 const createEmptyPurchaseForm = (): PurchaseFormState => ({
   purchaseDate: new Date().toISOString().split('T')[0],
   supplierId: '',
+  productId: '',
   item: '',
   quantity: '',
   unit: '个',
   unitPrice: '',
   remark: '',
+  newProduct: null,
 });
 
 const Purchase: React.FC = () => {
@@ -48,6 +61,9 @@ const Purchase: React.FC = () => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const printablePurchaseRef = useRef<HTMLDivElement>(null);
   const [formData, setFormData] = useState<PurchaseFormState>(createEmptyPurchaseForm());
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [quickCreateName, setQuickCreateName] = useState('');
+  const debouncedFilterItem = useDebouncedValue(filterItem);
 
   const queryClient = useQueryClient();
 
@@ -65,13 +81,7 @@ const Purchase: React.FC = () => {
     setShowModal(true);
   };
 
-  const { data: customers } = useQuery({
-    queryKey: ['customers'],
-    queryFn: async () => {
-      const response = await api.get('/customers');
-      return response.data.filter((customer: Customer) => customer.type === CustomerType.SUPPLIER) as Customer[];
-    },
-  });
+  const { data: customers } = useCounterparties(CustomerType.SUPPLIER);
 
   const { data: purchases, isLoading, error, refetch } = useQuery({
     queryKey: ['purchases'],
@@ -81,21 +91,44 @@ const Purchase: React.FC = () => {
     },
   });
 
+  const { data: rawMaterials } = useQuery({
+    queryKey: ['products', 'raw_material'],
+    queryFn: async () => {
+      const response = await api.get('/products?type=raw_material');
+      return response.data as Product[];
+    },
+  });
+
   const createMutation = useMutation({
     mutationFn: async (data: PurchaseFormState) => {
       const response = await api.post('/purchases', {
         purchaseDate: data.purchaseDate,
         supplierId: data.supplierId,
+        productId: data.productId,
         item: data.item,
         quantity: Number(data.quantity),
         unit: data.unit,
         unitPrice: Number(data.unitPrice),
         remark: data.remark,
+        ...(data.newProduct
+          ? {
+              newProduct: {
+                name: data.newProduct.name,
+                specification: data.newProduct.specification,
+                unit: data.newProduct.unit,
+                costPrice: Number(data.unitPrice) || 0,
+              },
+            }
+          : {}),
       });
       return response.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
       resetForm();
     },
   });
@@ -105,16 +138,31 @@ const Purchase: React.FC = () => {
       const response = await api.put(`/purchases/${id}`, {
         purchaseDate: data.purchaseDate,
         supplierId: data.supplierId,
+        productId: data.productId,
         item: data.item,
         quantity: Number(data.quantity),
         unit: data.unit,
         unitPrice: Number(data.unitPrice),
         remark: data.remark,
+        ...(data.newProduct
+          ? {
+              newProduct: {
+                name: data.newProduct.name,
+                specification: data.newProduct.specification,
+                unit: data.newProduct.unit,
+                costPrice: Number(data.unitPrice) || 0,
+              },
+            }
+          : {}),
       });
       return response.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
       resetForm();
     },
   });
@@ -125,6 +173,10 @@ const Purchase: React.FC = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['salesStats'] });
+      queryClient.invalidateQueries({ queryKey: ['customerStats'] });
+      queryClient.invalidateQueries({ queryKey: ['reconciliation'] });
     },
   });
 
@@ -132,6 +184,7 @@ const Purchase: React.FC = () => {
     setFormData({
       purchaseDate: purchase.purchaseDate,
       supplierId: purchase.supplierId || purchase.supplierEntity?.id || '',
+      productId: purchase.productId || purchase.product?.id || '',
       item: purchase.item,
       quantity: formatEditableDecimal(purchase.quantity),
       unit: purchase.unit || '个',
@@ -157,28 +210,52 @@ const Purchase: React.FC = () => {
     createMutation.mutate(formData);
   };
 
+  const handleProductSelect = (productId: string) => {
+    const product = (rawMaterials || []).find((item) => item.id === productId);
+    setFormData((current) => ({
+      ...current,
+      productId,
+      newProduct: null,
+      item: product ? `${product.name}${product.specification ? ` ${product.specification}` : ''}` : current.item,
+      unit: product?.unit || current.unit,
+      unitPrice: product ? formatEditableDecimal(product.costPrice || 0) : current.unitPrice,
+    }));
+  };
+
+  const openQuickCreate = (name: string) => {
+    setQuickCreateName(name);
+    setQuickCreateOpen(true);
+  };
+
+  const confirmQuickCreate = (draft: QuickCreateProductDraft) => {
+    setFormData((current) => ({
+      ...current,
+      productId: '',
+      newProduct: draft,
+      item: `${draft.name}${draft.specification ? ` ${draft.specification}` : ''}`,
+      unit: draft.unit || current.unit,
+      unitPrice: draft.price ? formatEditableDecimal(draft.price) : current.unitPrice,
+    }));
+    setQuickCreateOpen(false);
+  };
+
+  const clearNewProduct = () => {
+    setFormData((current) => ({ ...current, newProduct: null, item: '' }));
+  };
+
   const handleOpenSupplierExport = (supplierKey: string, event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     setExportSupplierKey(supplierKey);
   };
 
-  const handleDateShortcut = (type: 'month' | 'year' | 'all') => {
-    const today = new Date();
-    let startDate = '';
-    let endDate = '';
+  const handleDateShortcut = (shortcut: DateRangeShortcut) => {
+    setFilterDateRange(getDateRangeByShortcut(shortcut));
+  };
 
-    if (type === 'month') {
-      startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-      endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-    } else if (type === 'year') {
-      startDate = new Date(today.getFullYear(), 0, 1).toISOString().split('T')[0];
-      endDate = new Date(today.getFullYear(), 11, 31).toISOString().split('T')[0];
-    } else {
-      startDate = '';
-      endDate = '';
-    }
-
-    setFilterDateRange({ startDate, endDate });
+  const clearFilters = () => {
+    setFilterSupplierId('');
+    setFilterDateRange({ startDate: '', endDate: '' });
+    setFilterItem('');
   };
 
   const baseFilteredPurchases = useMemo(() => {
@@ -193,9 +270,45 @@ const Purchase: React.FC = () => {
 
   const groupedPurchases = useMemo(() => {
     return groupPurchases(baseFilteredPurchases, {
-      purchaseFilter: (purchase) => (filterItem ? purchase.item.toLowerCase().includes(filterItem.toLowerCase()) : true),
+      purchaseFilter: (purchase) => matchesKeyword(debouncedFilterItem, [
+        purchase.item,
+        purchase.remark,
+        purchase.unit,
+        purchase.product?.name,
+        purchase.product?.specification,
+        purchase.supplierEntity?.name,
+        purchase.supplier,
+      ]),
     });
-  }, [baseFilteredPurchases, filterItem]);
+  }, [baseFilteredPurchases, debouncedFilterItem]);
+  const filteredPurchaseCount = useMemo(
+    () => groupedPurchases.reduce((sum, group) => sum + group.purchaseCount, 0),
+    [groupedPurchases],
+  );
+
+  const activeFilters: ActiveFilter[] = [
+    filterDateRange.startDate || filterDateRange.endDate
+      ? {
+          key: 'date',
+          label: `日期: ${filterDateRange.startDate || '不限'} 至 ${filterDateRange.endDate || '不限'}`,
+          onRemove: () => setFilterDateRange({ startDate: '', endDate: '' }),
+        }
+      : null,
+    filterSupplierId
+      ? {
+          key: 'supplier',
+          label: `供应商: ${customers?.find((supplier) => supplier.id === filterSupplierId)?.name || filterSupplierId}`,
+          onRemove: () => setFilterSupplierId(''),
+        }
+      : null,
+    filterItem
+      ? {
+          key: 'keyword',
+          label: `关键词: ${filterItem}`,
+          onRemove: () => setFilterItem(''),
+        }
+      : null,
+  ].filter((item): item is ActiveFilter => Boolean(item));
 
   const printablePurchase = useMemo(() => {
     if (!exportSupplierKey) return null;
@@ -239,31 +352,26 @@ const Purchase: React.FC = () => {
     );
 
     try {
-      const file = await createPdfFileFromElement(printablePurchaseRef.current, {
-        filename,
-        orientation: 'landscape',
-        marginMm: 12,
-      });
+      const result = await exportPrintable(
+        printablePurchaseRef.current,
+        {
+          filename,
+          orientation: 'landscape',
+          marginMm: 12,
+          title: filename.replace(/\.pdf$/i, ''),
+          text: `${printablePurchase.supplierGroup.supplierName}的进货单`,
+        },
+        action,
+      );
 
-      if (action === 'save') {
-        downloadPdfFile(file);
-        setExportSupplierKey(null);
-        return;
-      }
-
-      const result = await sharePdfFile(file, {
-        title: filename.replace(/\.pdf$/i, ''),
-        text: `${printablePurchase.supplierGroup.supplierName}的进货单`,
-      });
-
-      if (result === 'downloaded') {
-        window.alert('当前浏览器无法直接分享到微信，已保存 PDF，可发送到微信。');
+      if (result === 'fallback-download') {
+        window.alert(getShareFallbackMessage());
       }
       if (result !== 'cancelled') {
         setExportSupplierKey(null);
       }
     } catch {
-      window.alert('PDF 生成失败，请稍后重试。');
+      window.alert('导出失败，请稍后重试。');
     } finally {
       setIsExportingPdf(false);
     }
@@ -358,7 +466,7 @@ const Purchase: React.FC = () => {
         action={{ label: '新增进货记录', onClick: openCreateModal }}
       />
 
-      <div className="purchase-page p-4 md:p-8">
+      <div className="purchase-page px-4 pb-4 pt-0 md:px-6 md:pb-6">
         <QueryStateBanner
           isLoading={isLoading}
           isError={Boolean(error)}
@@ -366,94 +474,61 @@ const Purchase: React.FC = () => {
           errorText="采购记录暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="purchase-screen-controls border-b border-gray-200 bg-gray-50 p-4">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-end">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">开始日期</label>
-                <DateField
-                  value={filterDateRange.startDate}
-                  onChange={(value) => setFilterDateRange({ ...filterDateRange, startDate: value })}
-                  className="w-full lg:w-40"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">结束日期</label>
-                <DateField
-                  value={filterDateRange.endDate}
-                  onChange={(value) => setFilterDateRange({ ...filterDateRange, endDate: value })}
-                  className="w-full lg:w-40"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 pb-0.5 sm:col-span-2 lg:col-span-1">
-                <button
-                  onClick={() => handleDateShortcut('month')}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                >
-                  本月
-                </button>
-                <button
-                  onClick={() => handleDateShortcut('year')}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                >
-                  今年
-                </button>
-                <button
-                  onClick={() => handleDateShortcut('all')}
-                  className="min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                >
-                  全部
-                </button>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">供应商</label>
-                <select
-                  value={filterSupplierId}
-                  onChange={(event) => setFilterSupplierId(event.target.value)}
-                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
-                >
-                  <option value="">所有供应商</option>
-                  {customers?.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>
-                      {supplier.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">品名</label>
-                <input
-                  type="text"
-                  value={filterItem}
-                  onChange={(event) => setFilterItem(event.target.value)}
-                  placeholder="输入品名搜索"
-                  className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none lg:w-44"
-                />
-              </div>
-
-              <div className="flex gap-2 pb-0.5 sm:col-span-2 lg:col-span-1 lg:ml-auto">
-                {(filterSupplierId || filterDateRange.startDate || filterDateRange.endDate || filterItem) && (
-                  <button
-                    onClick={() => {
-                      setFilterSupplierId('');
-                      setFilterDateRange({ startDate: '', endDate: '' });
-                      setFilterItem('');
-                    }}
-                    className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-amber-700 transition-colors hover:bg-amber-50 lg:w-auto"
+        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+          <div className="purchase-screen-controls">
+            <FilterPanel
+              totalCount={(purchases || []).length}
+              filteredCount={filteredPurchaseCount}
+              activeFilters={activeFilters}
+              onClear={clearFilters}
+              primary={
+                <>
+                  <FilterField label="关键词" className="lg:w-64">
+                    <SearchInput
+                      value={filterItem}
+                      onChange={setFilterItem}
+                      placeholder="品名、规格、供应商、备注"
+                    />
+                  </FilterField>
+                  <FilterField label="开始日期" className="lg:w-40">
+                    <DateField
+                      value={filterDateRange.startDate}
+                      onChange={(value) => setFilterDateRange({ ...filterDateRange, startDate: value })}
+                      className="w-full"
+                    />
+                  </FilterField>
+                  <FilterField label="结束日期" className="lg:w-40">
+                    <DateField
+                      value={filterDateRange.endDate}
+                      onChange={(value) => setFilterDateRange({ ...filterDateRange, endDate: value })}
+                      className="w-full"
+                    />
+                  </FilterField>
+                  <FilterField label="快捷日期" className="sm:col-span-2 lg:w-72">
+                    <DateShortcutGroup onSelect={handleDateShortcut} />
+                  </FilterField>
+                </>
+              }
+              advanced={
+                <FilterField label="供应商" className="lg:w-44">
+                  <select
+                    value={filterSupplierId}
+                    onChange={(event) => setFilterSupplierId(event.target.value)}
+                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none"
                   >
-                    清除筛选
-                  </button>
-                )}
-
-              </div>
-            </div>
+                    <option value="">所有供应商</option>
+                    {customers?.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </FilterField>
+              }
+            />
           </div>
 
-          <div className="purchase-screen-layout p-4 md:p-6">
+          <div className="purchase-screen-layout bg-canvas p-4 md:p-6">
             {groupedPurchases.length === 0 ? (
               <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-6 py-20 text-center">
                 <p className="text-base font-medium text-gray-700">暂无符合条件的采购记录</p>
@@ -465,145 +540,137 @@ const Purchase: React.FC = () => {
                   const isSupplierExpanded = expandedSupplierKeys.has(supplierGroup.supplierKey);
 
                   return (
-                    <section key={supplierGroup.supplierKey} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                      <button
-                        type="button"
-                        onClick={() => toggleSupplierExpand(supplierGroup.supplierKey)}
-                        className="flex w-full flex-col gap-4 px-4 py-4 text-left transition-colors hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between sm:px-5"
-                      >
-                        <div className="flex min-w-0 items-center gap-3">
-                          <div className="text-gray-400">
-                            {isSupplierExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                          </div>
-                          <div className="min-w-0">
-                            <h3 className="text-lg font-semibold text-gray-900">{supplierGroup.supplierName}</h3>
-                            {!supplierGroup.supplierId && (
-                              <p className="mt-1 text-xs text-amber-600">历史记录尚未关联供应商，编辑后即可纳入供应商对账。</p>
-                            )}
-                          </div>
-                        </div>
+                    <section
+                      key={supplierGroup.supplierKey}
+                      className="overflow-hidden rounded-2xl border border-line bg-white shadow-card"
+                    >
+                      <EntityCardHeader
+                        name={supplierGroup.supplierName}
+                        initial={supplierGroup.supplierName.slice(0, 1) || '供'}
+                        stats={[
+                          { label: '采购条数', value: String(supplierGroup.purchaseCount) },
+                          { label: '总金额', value: `¥${formatAmount(supplierGroup.totalAmount)}` },
+                        ]}
+                        note={
+                          !supplierGroup.supplierId
+                            ? '历史记录尚未关联供应商，编辑后即可纳入供应商对账。'
+                            : undefined
+                        }
+                        expanded={isSupplierExpanded}
+                        onToggle={() => toggleSupplierExpand(supplierGroup.supplierKey)}
+                        onExport={(event) => handleOpenSupplierExport(supplierGroup.supplierKey, event)}
+                      />
 
-                        <div className="grid w-full grid-cols-2 gap-3 text-left sm:w-auto sm:flex sm:shrink-0 sm:flex-wrap sm:items-center sm:gap-6 sm:text-right">
-                          <div className="rounded-lg bg-gray-50 p-3 sm:bg-transparent sm:p-0">
-                            <p className="text-xs uppercase tracking-[0.18em] text-gray-400">采购条数</p>
-                            <p className="mt-1 text-lg font-semibold text-gray-900">{supplierGroup.purchaseCount}</p>
-                          </div>
-                          <div className="rounded-lg bg-gray-50 p-3 text-right sm:bg-transparent sm:p-0">
-                            <p className="text-xs uppercase tracking-[0.18em] text-gray-400">总金额</p>
-                            <p className="mt-1 text-lg font-semibold text-gray-900">¥{formatAmount(supplierGroup.totalAmount)}</p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={(event) => handleOpenSupplierExport(supplierGroup.supplierKey, event)}
-                            className="col-span-2 inline-flex min-h-11 items-center justify-center rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 sm:col-span-1"
-                            title="导出 PDF"
-                          >
-                            <Download className="mr-1 h-4 w-4" />
-                            导出
-                          </button>
-                        </div>
-                      </button>
-
-                      {isSupplierExpanded && (
-                        <div className="border-t border-gray-200 bg-gray-50/70 p-4">
-                          <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-                            <div className="hidden overflow-x-auto md:block">
-                              <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
-                                  <tr>
-                                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">日期</th>
-                                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">品名</th>
-                                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">数量</th>
-                                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">单位</th>
-                                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">单价</th>
-                                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">总金额</th>
-                                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">备注</th>
-                                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">操作</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-200">
-                                  {supplierGroup.purchases.map((purchase) => (
-                                    <tr key={purchase.id} className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-sm text-gray-500">{purchase.purchaseDate}</td>
-                                      <td className="px-3 py-2 text-sm text-gray-900">{purchase.item}</td>
-                                      <td className="px-3 py-2 text-right text-sm text-gray-900">
-                                        {formatDisplayDecimal(purchase.quantity, 4)}
-                                      </td>
-                                      <td className="px-3 py-2 text-center text-sm text-gray-500">{purchase.unit || '-'}</td>
-                                      <td className="px-3 py-2 text-right text-sm text-gray-900">
-                                        {formatUnitPrice(purchase.unitPrice)}
-                                      </td>
-                                      <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                                        ¥{formatAmount(getPurchaseAmount(purchase))}
-                                      </td>
-                                      <td className="px-3 py-2 text-sm text-gray-500">{purchase.remark || '-'}</td>
-                                      <td className="px-3 py-2 text-right">
-                                        <div className="flex justify-end gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleEditPurchase(purchase)}
-                                            className="rounded-md border border-gray-300 p-2 text-emerald-700 transition-colors hover:bg-emerald-50"
-                                            title="编辑"
-                                          >
-                                            <Edit className="h-4 w-4" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => handleDeletePurchase(purchase)}
-                                            className="rounded-md border border-gray-300 p-2 text-red-600 transition-colors hover:bg-red-50"
-                                            title="删除"
-                                          >
-                                            <Trash2 className="h-4 w-4" />
-                                          </button>
+                      <DisclosureSection open={isSupplierExpanded}>
+                        <div className="space-y-5 border-t border-line bg-canvas px-3 py-4 sm:px-4">
+                          {supplierGroup.dates.map((dateGroup) => (
+                            <div key={dateGroup.date} className="space-y-3">
+                              <DateSectionHeader
+                                date={dateGroup.date}
+                                count={dateGroup.rowCount}
+                                countLabel="条"
+                                amount={dateGroup.totalAmount}
+                                formatAmount={formatAmount}
+                              />
+                              <div className="overflow-hidden rounded-xl border border-line bg-white">
+                                <div className="hidden overflow-x-auto md:block">
+                                  <table className="min-w-full">
+                                    <thead>
+                                      <tr className="border-b border-line bg-canvas text-ink-tertiary">
+                                        <th className="px-4 py-2.5 text-left text-xs font-medium">品名</th>
+                                        <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
+                                        <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                                        <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
+                                        <th className="px-4 py-2.5 text-right text-xs font-medium">总金额</th>
+                                        <th className="px-4 py-2.5 text-left text-xs font-medium">备注</th>
+                                        <th className="px-4 py-2.5 text-right text-xs font-medium">操作</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-line-soft">
+                                      {dateGroup.purchases.map((purchase) => (
+                                        <tr key={purchase.id} className="transition-colors hover:bg-brand-50/40">
+                                          <td className="px-4 py-2.5 text-sm text-ink">{purchase.item}</td>
+                                          <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
+                                            {formatDisplayDecimal(purchase.quantity, 4)}
+                                          </td>
+                                          <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">{purchase.unit || '-'}</td>
+                                          <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
+                                            {formatUnitPrice(purchase.unitPrice)}
+                                          </td>
+                                          <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-ink">
+                                            ¥{formatAmountDetail(getPurchaseAmount(purchase))}
+                                          </td>
+                                          <td className="px-4 py-2.5 text-sm text-ink-secondary">{purchase.remark || '-'}</td>
+                                          <td className="px-4 py-2.5 text-right">
+                                            <div className="flex justify-end gap-2">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleEditPurchase(purchase)}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-emerald-600 transition-colors hover:bg-emerald-50"
+                                                title="编辑"
+                                              >
+                                                <Edit className="h-4 w-4" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeletePurchase(purchase)}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-rose-500 transition-colors hover:bg-rose-50"
+                                                title="删除"
+                                              >
+                                                <Trash2 className="h-4 w-4" />
+                                              </button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                <div className="space-y-3 p-3 md:hidden">
+                                  {dateGroup.purchases.map((purchase) => (
+                                    <MobileRecordCard key={purchase.id} className="border-line-soft shadow-none">
+                                      <div className="mb-3 flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div className="text-sm font-semibold text-ink">{purchase.item}</div>
                                         </div>
-                                      </td>
-                                    </tr>
+                                        <div className="shrink-0 text-right">
+                                          <div className="text-xs text-ink-tertiary">金额</div>
+                                          <div className="text-base font-bold tabular-nums text-ink">
+                                            ¥{formatAmountDetail(getPurchaseAmount(purchase))}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <MobileFieldGrid>
+                                        <MobileField label="数量" value={`${formatDisplayDecimal(purchase.quantity, 4)} ${purchase.unit || ''}`} />
+                                        <MobileField label="单价" value={formatUnitPrice(purchase.unitPrice)} align="right" />
+                                        <MobileField label="备注" value={purchase.remark || '-'} />
+                                      </MobileFieldGrid>
+                                      <MobileActionBar>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleEditPurchase(purchase)}
+                                          className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-100 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+                                        >
+                                          <Edit className="h-4 w-4" />
+                                          编辑
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeletePurchase(purchase)}
+                                          className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                          删除
+                                        </button>
+                                      </MobileActionBar>
+                                    </MobileRecordCard>
                                   ))}
-                                </tbody>
-                              </table>
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-3 p-3 md:hidden">
-                              {supplierGroup.purchases.map((purchase) => (
-                                <MobileRecordCard key={purchase.id} className="shadow-none">
-                                  <div className="mb-3 flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <div className="text-sm font-semibold text-gray-900">{purchase.item}</div>
-                                      <div className="mt-1 text-xs text-gray-500">{purchase.purchaseDate}</div>
-                                    </div>
-                                    <div className="shrink-0 text-right">
-                                      <div className="text-xs text-gray-500">金额</div>
-                                      <div className="text-base font-bold text-gray-900">¥{formatAmount(getPurchaseAmount(purchase))}</div>
-                                    </div>
-                                  </div>
-                                  <MobileFieldGrid>
-                                    <MobileField label="数量" value={`${formatDisplayDecimal(purchase.quantity, 4)} ${purchase.unit || ''}`} />
-                                    <MobileField label="单价" value={formatUnitPrice(purchase.unitPrice)} align="right" />
-                                    <MobileField label="备注" value={purchase.remark || '-'} />
-                                  </MobileFieldGrid>
-                                  <MobileActionBar>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleEditPurchase(purchase)}
-                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-100 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50"
-                                    >
-                                      <Edit className="h-4 w-4" />
-                                      编辑
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeletePurchase(purchase)}
-                                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                      删除
-                                    </button>
-                                  </MobileActionBar>
-                                </MobileRecordCard>
-                              ))}
-                            </div>
-                          </div>
+                          ))}
                         </div>
-                      )}
+                      </DisclosureSection>
                     </section>
                   );
                 })}
@@ -614,7 +681,7 @@ const Purchase: React.FC = () => {
           {printablePurchase && (
             <ExportActionDialog
               title="导出进货单"
-              description={`为 ${printablePurchase.supplierGroup.supplierName} 保存 PDF，或在手机端分享到微信。`}
+              description={`为 ${printablePurchase.supplierGroup.supplierName} 生成 PDF 文件，可保存，或打开系统分享面板后选择微信。`}
               isProcessing={isExportingPdf}
               onSave={() => handlePurchasePdfExport('save')}
               onShare={() => handlePurchasePdfExport('share')}
@@ -670,7 +737,7 @@ const Purchase: React.FC = () => {
                           {formatUnitPrice(purchase.unitPrice)}
                         </td>
                         <td className="border border-gray-900 px-2 py-3 text-right text-sm font-medium text-gray-900">
-                          ¥{formatAmount(getPurchaseAmount(purchase))}
+                          ¥{formatAmountDetail(getPurchaseAmount(purchase))}
                         </td>
                         <td className="border border-gray-900 px-2 py-3 text-sm text-gray-700">
                           {purchase.remark || '-'}
@@ -725,14 +792,39 @@ const Purchase: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">品名</label>
-                <input
-                  type="text"
-                  value={formData.item}
-                  onChange={(event) => setFormData({ ...formData, item: event.target.value })}
-                  placeholder="例如：铜线、螺丝、塑料粒子"
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
-                />
+                <label className="block text-sm font-medium text-gray-700">原材料（品名 / 规格）</label>
+                {formData.newProduct ? (
+                  <div className="mt-1 flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-emerald-700">
+                        新建：{formData.newProduct.name}
+                        {formData.newProduct.specification ? ` - ${formData.newProduct.specification}` : ''}
+                      </div>
+                      <div className="mt-0.5 text-xs text-emerald-600">将随本单一起保存到产品管理（原材料）</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={clearNewProduct}
+                      className="shrink-0 rounded-md p-1 text-emerald-600 transition-colors hover:bg-emerald-100"
+                      title="移除"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <ProductAutocomplete
+                      products={rawMaterials || []}
+                      value={formData.productId}
+                      onSelect={handleProductSelect}
+                      allowCreate
+                      onCreateNew={openQuickCreate}
+                      placeholder="输入原材料名称或规格"
+                      className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">选择已有原材料，或直接新建——新建会自动保存到产品管理。</p>
+                  </>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -795,13 +887,23 @@ const Purchase: React.FC = () => {
               </button>
               <button
                 onClick={handleCreateOrUpdate}
-                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+                disabled={!isEditing && !formData.productId && !formData.newProduct}
+                className="min-h-11 rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isEditing ? '保存采购记录' : '创建采购记录'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {quickCreateOpen && (
+        <QuickCreateProductForm
+          initialName={quickCreateName}
+          priceLabel="进货单价"
+          onCancel={() => setQuickCreateOpen(false)}
+          onConfirm={confirmQuickCreate}
+        />
       )}
     </Layout>
   );

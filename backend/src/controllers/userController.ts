@@ -9,7 +9,7 @@ export const getAllUsers = async (_req: AuthRequest, res: Response) => {
     const users = await userService.getAllUsers();
     res.json(users);
   } catch (error: any) {
-    res.status(500).json({ message: '获取用户列表失败', error });
+    res.status(500).json({ message: '获取用户列表失败' });
   }
 };
 
@@ -25,7 +25,7 @@ export const createUser = async (req: AuthRequest, res: Response) => {
     if (error instanceof AppError) {
       return res.status(error.statusCode).json({ message: error.message });
     }
-    res.status(500).json({ message: '创建用户失败', error });
+    res.status(500).json({ message: '创建用户失败' });
   }
 };
 
@@ -42,7 +42,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     if (error instanceof AppError) {
       return res.status(error.statusCode).json({ message: error.message });
     }
-    res.status(500).json({ message: '更新用户失败', error });
+    res.status(500).json({ message: '更新用户失败' });
   }
 };
 
@@ -56,7 +56,7 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
     if (error instanceof AppError) {
       return res.status(error.statusCode).json({ message: error.message });
     }
-    res.status(500).json({ message: '删除用户失败', error });
+    res.status(500).json({ message: '删除用户失败' });
   }
 };
 
@@ -70,6 +70,6 @@ export const resetUserPassword = async (req: AuthRequest, res: Response) => {
     if (error instanceof AppError) {
       return res.status(error.statusCode).json({ message: error.message });
     }
-    res.status(500).json({ message: '重置密码失败', error });
+    res.status(500).json({ message: '重置密码失败' });
   }
 };

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from '../lib/typeorm';
+import { Entity, Index, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from '../lib/typeorm';
 import { User } from './User';
 import { Product } from './Product';
 import { ColumnNumericTransformer } from '../utils/transformers';
@@ -12,9 +12,13 @@ export enum InventoryRecordStatus {
 export enum InventoryRecordSubmissionMode {
   EMPLOYEE_SUBMIT = 'employee_submit',
   ADMIN_ASSIGN = 'admin_assign',
+  RETURN_DEDUCTION = 'return_deduction',
 }
 
 @Entity('inventory_records')
+@Index(['submittedBy', 'createdAt'])
+@Index(['status'])
+@Index(['productId'])
 export class InventoryRecord {
   @PrimaryGeneratedColumn('uuid')
   id: string;

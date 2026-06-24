@@ -9,18 +9,30 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+  font-family: 'PingFang SC', 'PingFang TC', 'Inter', system-ui, -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'Helvetica Neue', Arial,
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   @apply bg-[#F5F6F7] text-[#1F2329];
+}
+
+/* 数据表格使用等宽数字，金额/数量纵向对齐（飞书 / 火山引擎表格惯例） */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 选区高亮 */
+::selection {
+  background: #d9e5ff;
+  color: #1f2329;
 }
 
 /* Feishu Style Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -28,16 +40,20 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-gray-300 rounded-full;
+  background: #c9cdd4;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-400;
+  background: #a9aeb8;
+  background-clip: padding-box;
 }
 
 /* Common Card Style */
 .feishu-card {
-  @apply bg-white rounded-lg border border-[#DEE0E3] shadow-sm;
+  @apply bg-white rounded-xl border border-[#DEE0E3] shadow-card;
 }
 
 /* Common Button Style */

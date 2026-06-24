@@ -4,9 +4,10 @@
   "description": "Kinko企业管理系统后端",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev": "NODE_USE_ENV_PROXY=1 ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "NODE_USE_ENV_PROXY=1 node dist/server.js",
+    "data:audit": "ts-node --transpile-only src/scripts/auditDataQuality.ts",
     "migration:run": "typeorm migration:run -d dist/config/database.js",
     "migration:generate": "typeorm migration:generate -d src/config/database.ts"
   },
