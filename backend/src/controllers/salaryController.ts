@@ -1,90 +1,157 @@
 import { Response } from 'express';
 import { AppDataSource } from '../config/database';
-import { InventoryRecord, InventoryRecordStatus, User, UserRole } from '../entities';
+import {
+  InventoryRecord,
+  InventoryRecordStatus,
+  InventoryRecordSubmissionMode,
+  SalaryDeduction,
+  UserRole,
+} from '../entities';
 import { AuthRequest } from '../middlewares/auth';
-import { Between } from '../lib/typeorm';
 import { roundCurrencyAmount, roundQuantity } from '../utils/decimal';
 
 const inventoryRepository = AppDataSource.getRepository(InventoryRecord);
-const userRepository = AppDataSource.getRepository(User);
+const deductionRepository = AppDataSource.getRepository(SalaryDeduction);
 
 export const getSalaryReport = async (req: AuthRequest, res: Response) => {
   try {
     const { startDate, endDate, userId, month } = req.query;
 
-    let queryBuilder = inventoryRepository
+    // ──────────────────────────────────────────────────────────────────
+    // 1. Inventory records (gross earnings)
+    //    Exclude ADMIN_DIRECT and legacy RETURN_DEDUCTION (replaced by
+    //    the new salary_deductions table going forward).
+    // ──────────────────────────────────────────────────────────────────
+    const recordQb = inventoryRepository
       .createQueryBuilder('record')
       .leftJoinAndSelect('record.product', 'product')
       .leftJoinAndSelect('record.submitter', 'submitter')
-      .where('record.status = :status', { status: InventoryRecordStatus.APPROVED });
+      .where('record.status = :status', { status: InventoryRecordStatus.APPROVED })
+      .andWhere('record.submissionMode NOT IN (:...excluded)', {
+        excluded: [
+          InventoryRecordSubmissionMode.ADMIN_DIRECT,
+          InventoryRecordSubmissionMode.RETURN_DEDUCTION,
+        ],
+      });
 
     if (month) {
-      // 月份参数 (格式: YYYY-MM)。显式拆分按本地时区构造，避免 new Date('YYYY-MM')
-      // 被解析成 UTC 0 点、再用本地时区读取，导致 UTC 以西时区整月算错（与下面 startDate/endDate 同款处理）。
-      const [monthYear, monthIndex] = (month as string).split('-').map(Number);
-      const startOfMonth = new Date(monthYear, monthIndex - 1, 1, 0, 0, 0, 0);
-      const endOfMonth = new Date(monthYear, monthIndex, 0, 23, 59, 59, 999);
-      
-      queryBuilder.andWhere('record.createdAt BETWEEN :startOfMonth AND :endOfMonth', {
-        startOfMonth,
-        endOfMonth,
+      const [y, m] = (month as string).split('-').map(Number);
+      recordQb.andWhere('record.createdAt BETWEEN :s AND :e', {
+        s: new Date(y, m - 1, 1, 0, 0, 0, 0),
+        e: new Date(y, m, 0, 23, 59, 59, 999),
       });
     } else if (startDate && endDate) {
-      // 兼容原有的日期范围查询：按本地时区把开始日归一到 00:00:00、结束日归一到 23:59:59.999，
-      // 否则 new Date('YYYY-MM-DD') 会被当成当天 0 点（UTC），导致结束日当天的记录被整天漏算。
-      const [startYear, startMonth, startDay] = (startDate as string).split('-').map(Number);
-      const [endYear, endMonth, endDay] = (endDate as string).split('-').map(Number);
-      const rangeStart = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
-      const rangeEnd = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999);
-
-      queryBuilder.andWhere('record.createdAt BETWEEN :rangeStart AND :rangeEnd', {
-        rangeStart,
-        rangeEnd,
+      const [sy, sm, sd] = (startDate as string).split('-').map(Number);
+      const [ey, em, ed] = (endDate as string).split('-').map(Number);
+      recordQb.andWhere('record.createdAt BETWEEN :s AND :e', {
+        s: new Date(sy, sm - 1, sd, 0, 0, 0, 0),
+        e: new Date(ey, em - 1, ed, 23, 59, 59, 999),
       });
     }
 
     if (req.user?.role === UserRole.PIECE_RATE) {
-      queryBuilder.andWhere('record.submittedBy = :userId', { userId: req.user.id });
+      recordQb.andWhere('record.submittedBy = :uid', { uid: req.user.id });
     } else if (userId) {
-      queryBuilder.andWhere('record.submittedBy = :userId', { userId });
+      recordQb.andWhere('record.submittedBy = :uid', { uid: userId });
     }
 
-    const records = await queryBuilder.orderBy('record.createdAt', 'DESC').getMany();
+    const records = await recordQb.orderBy('record.createdAt', 'DESC').getMany();
 
-    const userTotals = new Map<string, { user: any; totalAmount: number; totalQuantity: number; records: any[] }>();
+    // ──────────────────────────────────────────────────────────────────
+    // 2. Salary deductions for the same period (filtered by deductionDate)
+    // ──────────────────────────────────────────────────────────────────
+    const dqb = deductionRepository
+      .createQueryBuilder('d')
+      .leftJoinAndSelect('d.employee', 'employee');
 
-    records.forEach((record) => {
-      const userId = record.submittedBy;
-      if (!userTotals.has(userId)) {
-        userTotals.set(userId, {
-          user: record.submitter,
-          totalAmount: 0,
+    if (month) {
+      const [y, m] = (month as string).split('-').map(Number);
+      const lastDay = new Date(y, m, 0).getDate();
+      dqb.andWhere('d.deductionDate >= :ds AND d.deductionDate <= :de', {
+        ds: `${y}-${String(m).padStart(2, '0')}-01`,
+        de: `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+      });
+    } else if (startDate && endDate) {
+      dqb.andWhere('d.deductionDate >= :ds AND d.deductionDate <= :de', {
+        ds: startDate,
+        de: endDate,
+      });
+    }
+
+    if (req.user?.role === UserRole.PIECE_RATE) {
+      dqb.andWhere('d.employeeId = :uid', { uid: req.user.id });
+    } else if (userId) {
+      dqb.andWhere('d.employeeId = :uid', { uid: userId });
+    }
+
+    const deductions = await dqb.orderBy('d.deductionDate', 'DESC').getMany();
+
+    // ──────────────────────────────────────────────────────────────────
+    // 3. Build per-employee map
+    // ──────────────────────────────────────────────────────────────────
+    type EmployeeEntry = {
+      user: any;
+      grossAmount: number;
+      totalDeductions: number;
+      totalQuantity: number;
+      records: any[];
+      deductions: any[];
+    };
+
+    const userMap = new Map<string, EmployeeEntry>();
+
+    const getOrCreate = (uid: string, user: any): EmployeeEntry => {
+      if (!userMap.has(uid)) {
+        userMap.set(uid, {
+          user,
+          grossAmount: 0,
+          totalDeductions: 0,
           totalQuantity: 0,
           records: [],
+          deductions: [],
         });
       }
-      const userTotal = userTotals.get(userId)!;
-      userTotal.totalAmount += Number(record.totalAmount);
-      userTotal.totalQuantity += record.quantity;
-      userTotal.records.push(record);
+      return userMap.get(uid)!;
+    };
+
+    records.forEach((r) => {
+      const entry = getOrCreate(r.submittedBy, r.submitter);
+      entry.grossAmount += Number(r.totalAmount);
+      entry.totalQuantity += Number(r.quantity);
+      entry.records.push(r);
     });
 
-    // 金额/数量统一四舍五入，避免浮点累加产生 4823.8400000001 之类的漂移，
-    // 让每个员工的合计与汇总口径一致（工资即按此发放，无单独结算表）。
-    const report = Array.from(userTotals.values()).map((entry) => ({
-      ...entry,
-      totalAmount: roundCurrencyAmount(entry.totalAmount),
-      totalQuantity: roundQuantity(entry.totalQuantity),
-    }));
+    deductions.forEach((d) => {
+      const entry = getOrCreate(d.employeeId, d.employee);
+      entry.totalDeductions += Number(d.amount);
+      entry.deductions.push(d);
+    });
+
+    const report = Array.from(userMap.values()).map((entry) => {
+      const grossAmount = roundCurrencyAmount(entry.grossAmount);
+      const totalDeductions = roundCurrencyAmount(entry.totalDeductions);
+      return {
+        user: entry.user,
+        grossAmount,
+        totalDeductions,
+        netSalary: roundCurrencyAmount(grossAmount - totalDeductions),
+        totalQuantity: roundQuantity(entry.totalQuantity),
+        records: entry.records,
+        deductions: entry.deductions,
+      };
+    });
+
+    const totalGrossAmount = roundCurrencyAmount(report.reduce((s, r) => s + r.grossAmount, 0));
+    const totalDeductionsSum = roundCurrencyAmount(report.reduce((s, r) => s + r.totalDeductions, 0));
 
     res.json({
       report,
       summary: {
         totalRecords: records.length,
-        totalAmount: roundCurrencyAmount(
-          records.reduce((sum, r) => sum + Number(r.totalAmount), 0),
-        ),
-        totalQuantity: roundQuantity(records.reduce((sum, r) => sum + Number(r.quantity), 0)),
+        totalGrossAmount,
+        totalDeductions: totalDeductionsSum,
+        totalNetSalary: roundCurrencyAmount(totalGrossAmount - totalDeductionsSum),
+        totalQuantity: roundQuantity(records.reduce((s, r) => s + Number(r.quantity), 0)),
       },
     });
   } catch (error) {

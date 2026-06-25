@@ -37,6 +37,10 @@ export class ReturnOrderItem {
   @Column({ type: 'uuid', nullable: true })
   deductInventoryRecordId: string | null;
 
+  // 本明细行共扣了几位员工（0 = 无扣款）
+  @Column({ type: 'int', default: 0 })
+  deductionCount: number;
+
   @ManyToOne(() => ReturnOrder, (order) => order.items, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'returnOrderId' })
   returnOrder: ReturnOrder;

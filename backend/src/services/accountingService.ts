@@ -116,11 +116,26 @@ export class AccountingService {
       }),
     ]);
 
+    // 批量计算每张送货单的已退货金额，避免 N+1
+    const returnedAmountMap = new Map<string, number>();
+    for (const r of returnOrders) {
+      if (r.deliveryOrderId) {
+        returnedAmountMap.set(
+          r.deliveryOrderId,
+          (returnedAmountMap.get(r.deliveryOrderId) ?? 0) + Number(r.totalAmount || 0),
+        );
+      }
+    }
+    const deliveryOrdersWithReturns = deliveryOrders.map((o) => ({
+      ...o,
+      returnedAmount: returnedAmountMap.get(o.id) ?? 0,
+    }));
+
     const groups = customers.map((customer) => {
       const isSupplier = customer.type === CustomerType.SUPPLIER;
       const groupOrders = isSupplier
         ? []
-        : deliveryOrders.filter((order) => order.customerId === customer.id);
+        : deliveryOrdersWithReturns.filter((order) => order.customerId === customer.id);
       const groupPurchases = isSupplier
         ? purchases.filter((purchase) => purchase.supplierId === customer.id)
         : [];

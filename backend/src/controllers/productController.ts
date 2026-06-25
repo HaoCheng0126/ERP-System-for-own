@@ -28,6 +28,15 @@ type CreateProductData = {
   costPrice?: number;
   basePrice?: number | null;
   stock?: number;
+  lowStockThreshold?: number | null;
+};
+
+// 安全库存阈值归一化：空/无效 → null（不预警）；否则四舍五入到 4 位且不小于 0。
+const normalizeLowStockThreshold = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) return null;
+  return roundQuantity(num);
 };
 
 // 在调用方提供的事务 manager 内创建产品，供送货单/入库单内联新建产品复用。
@@ -68,6 +77,7 @@ export const createProductWithManager = async (
     costPrice: roundUnitPrice(data.costPrice),
     basePrice: data.basePrice === undefined || data.basePrice === null ? null : roundUnitPrice(data.basePrice),
     stock,
+    lowStockThreshold: normalizeLowStockThreshold(data.lowStockThreshold),
   });
   await manager.save(product);
   return product;
@@ -198,6 +208,9 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       }
       if (req.body.basePrice !== undefined) {
         productInTransaction.basePrice = req.body.basePrice === null ? null : roundUnitPrice(req.body.basePrice);
+      }
+      if (req.body.lowStockThreshold !== undefined) {
+        productInTransaction.lowStockThreshold = normalizeLowStockThreshold(req.body.lowStockThreshold);
       }
       if (nextStock !== undefined) {
         productInTransaction.stock = nextStock;

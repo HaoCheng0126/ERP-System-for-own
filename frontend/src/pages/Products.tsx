@@ -18,11 +18,12 @@ type ProductTypeFilter = 'all' | ProductType;
 
 type ProductFormState = Omit<
   Product,
-  'id' | 'isActive' | 'createdAt' | 'updatedAt' | 'productPrices' | 'costPrice' | 'basePrice' | 'stock'
+  'id' | 'isActive' | 'createdAt' | 'updatedAt' | 'productPrices' | 'costPrice' | 'basePrice' | 'stock' | 'lowStockThreshold'
 > & {
   costPrice: string | number;
   basePrice: string | number;
   stock: string | number;
+  lowStockThreshold: string | number | null;
 };
 
 type EditableProductState = ProductFormState & { id: string };
@@ -35,6 +36,7 @@ const createEmptyProductForm = (): ProductFormState => ({
   costPrice: '',
   basePrice: '',
   stock: 0,
+  lowStockThreshold: '',
 });
 
 const toEditableProductForm = (product: Product): EditableProductState => ({
@@ -42,6 +44,7 @@ const toEditableProductForm = (product: Product): EditableProductState => ({
   costPrice: formatEditableDecimal(product.costPrice),
   basePrice: formatEditableDecimal(product.basePrice ?? 0),
   stock: product.stock ?? 0,
+  lowStockThreshold: product.lowStockThreshold ?? '',
 });
 
 const Products: React.FC = () => {
@@ -58,6 +61,8 @@ const Products: React.FC = () => {
     customerId: '',
     price: '',
   });
+  // 行内编辑某条客户特定单价：记录正在编辑的价格行 id 与编辑值
+  const [editingPrice, setEditingPrice] = useState<{ id: string; value: string } | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -203,6 +208,16 @@ const Products: React.FC = () => {
     if (window.confirm('确定要删除这个客户定价吗？')) {
       deletePriceMutation.mutate(priceId);
     }
+  };
+
+  // 保存行内编辑的客户单价：复用按 customerId upsert 的设价接口
+  const handleSaveEditPrice = (price: ProductPrice) => {
+    if (!editingPrice || editingPrice.id !== price.id) return;
+    if (!(Number(editingPrice.value) > 0)) return;
+    setPriceMutation.mutate(
+      { customerId: price.customerId, price: editingPrice.value },
+      { onSuccess: () => setEditingPrice(null) },
+    );
   };
 
   const filteredProducts = ((products || []) as Product[]).filter((product) => {
@@ -402,6 +417,16 @@ const Products: React.FC = () => {
                               onChange={(e) => setEditingProduct({ ...editingProduct, stock: parseFloat(e.target.value) })}
                               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm text-right"
                             />
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.0001"
+                              value={editingProduct.lowStockThreshold ?? ''}
+                              onChange={(e) => setEditingProduct({ ...editingProduct, lowStockThreshold: e.target.value })}
+                              placeholder="安全库存"
+                              title="安全库存：库存低于此值时仪表盘预警，留空不预警"
+                              className="mt-1 w-full px-3 py-1.5 border border-gray-200 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-xs text-right text-amber-700 placeholder:text-gray-400"
+                            />
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <input
@@ -520,15 +545,60 @@ const Products: React.FC = () => {
                                       <tr key={price.id} className="hover:bg-gray-50/50 transition-colors">
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">{price.customer?.name}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{price.customer?.contactPerson || '-'}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-semibold text-gray-900">¥{formatUnitPrice(price.price)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-semibold text-gray-900">
+                                          {editingPrice?.id === price.id ? (
+                                            <input
+                                              type="number"
+                                              step="0.0001"
+                                              autoFocus
+                                              value={editingPrice.value}
+                                              onChange={(e) => setEditingPrice({ id: price.id, value: e.target.value })}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter') handleSaveEditPrice(price);
+                                                if (e.key === 'Escape') setEditingPrice(null);
+                                              }}
+                                              className="w-28 rounded-md border border-blue-300 px-2 py-1 text-right text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                            />
+                                          ) : (
+                                            <>¥{formatUnitPrice(price.price)}</>
+                                          )}
+                                        </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium pr-8">
-                                          <button
-                                            onClick={() => handleDeletePrice(price.id)}
-                                            className="text-gray-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg transition-colors"
-                                            title="删除"
-                                          >
-                                            <Trash2 className="w-4 h-4" />
-                                          </button>
+                                          {editingPrice?.id === price.id ? (
+                                            <div className="inline-flex items-center gap-1">
+                                              <button
+                                                onClick={() => handleSaveEditPrice(price)}
+                                                className="text-gray-400 hover:text-green-600 p-1.5 hover:bg-green-50 rounded-lg transition-colors"
+                                                title="保存"
+                                              >
+                                                <Save className="w-4 h-4" />
+                                              </button>
+                                              <button
+                                                onClick={() => setEditingPrice(null)}
+                                                className="text-gray-400 hover:text-gray-600 p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                                                title="取消"
+                                              >
+                                                <X className="w-4 h-4" />
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <div className="inline-flex items-center gap-1">
+                                              <button
+                                                onClick={() => setEditingPrice({ id: price.id, value: formatEditableDecimal(price.price) })}
+                                                className="text-gray-400 hover:text-blue-600 p-1.5 hover:bg-blue-50 rounded-lg transition-colors"
+                                                title="编辑"
+                                              >
+                                                <Edit className="w-4 h-4" />
+                                              </button>
+                                              <button
+                                                onClick={() => handleDeletePrice(price.id)}
+                                                className="text-gray-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                                                title="删除"
+                                              >
+                                                <Trash2 className="w-4 h-4" />
+                                              </button>
+                                            </div>
+                                          )}
                                         </td>
                                       </tr>
                                     ))}
@@ -625,6 +695,18 @@ const Products: React.FC = () => {
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
                           />
                         </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-500">安全库存（可选，库存低于此值预警）</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.0001"
+                          value={editingProduct.lowStockThreshold ?? ''}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, lowStockThreshold: e.target.value })}
+                          placeholder="留空表示不预警"
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
+                        />
                       </div>
                       <div className="flex gap-2 pt-1">
                         <button
@@ -739,15 +821,55 @@ const Products: React.FC = () => {
                                           <div className="text-xs text-gray-400">{price.customer.contactPerson}</div>
                                         )}
                                       </div>
-                                      <div className="flex shrink-0 items-center gap-3">
-                                        <span className="text-sm font-semibold tabular-nums text-gray-900">¥{formatUnitPrice(price.price)}</span>
-                                        <button
-                                          onClick={() => handleDeletePrice(price.id)}
-                                          className="text-gray-400 hover:text-red-600"
-                                          aria-label="删除"
-                                        >
-                                          <Trash2 className="h-4 w-4" />
-                                        </button>
+                                      <div className="flex shrink-0 items-center gap-2">
+                                        {editingPrice?.id === price.id ? (
+                                          <>
+                                            <input
+                                              type="number"
+                                              step="0.0001"
+                                              autoFocus
+                                              value={editingPrice.value}
+                                              onChange={(e) => setEditingPrice({ id: price.id, value: e.target.value })}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter') handleSaveEditPrice(price);
+                                                if (e.key === 'Escape') setEditingPrice(null);
+                                              }}
+                                              className="w-24 rounded-md border border-blue-300 px-2 py-1 text-right text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                            />
+                                            <button
+                                              onClick={() => handleSaveEditPrice(price)}
+                                              className="text-gray-400 hover:text-green-600"
+                                              aria-label="保存"
+                                            >
+                                              <Save className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                              onClick={() => setEditingPrice(null)}
+                                              className="text-gray-400 hover:text-gray-600"
+                                              aria-label="取消"
+                                            >
+                                              <X className="h-4 w-4" />
+                                            </button>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <span className="text-sm font-semibold tabular-nums text-gray-900">¥{formatUnitPrice(price.price)}</span>
+                                            <button
+                                              onClick={() => setEditingPrice({ id: price.id, value: formatEditableDecimal(price.price) })}
+                                              className="text-gray-400 hover:text-blue-600"
+                                              aria-label="编辑"
+                                            >
+                                              <Edit className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                              onClick={() => handleDeletePrice(price.id)}
+                                              className="text-gray-400 hover:text-red-600"
+                                              aria-label="删除"
+                                            >
+                                              <Trash2 className="h-4 w-4" />
+                                            </button>
+                                          </>
+                                        )}
                                       </div>
                                     </div>
                                   ))}
@@ -843,6 +965,18 @@ const Products: React.FC = () => {
                     onChange={(e) => setNewProduct({ ...newProduct, costPrice: e.target.value })}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                   />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">安全库存（可选）</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  value={newProduct.lowStockThreshold ?? ''}
+                  onChange={(e) => setNewProduct({ ...newProduct, lowStockThreshold: e.target.value })}
+                  placeholder="库存低于此值时预警"
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
               </div>
             </div>
             <div className="flex justify-end mt-6">

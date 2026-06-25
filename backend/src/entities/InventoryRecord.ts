@@ -13,6 +13,7 @@ export enum InventoryRecordSubmissionMode {
   EMPLOYEE_SUBMIT = 'employee_submit',
   ADMIN_ASSIGN = 'admin_assign',
   RETURN_DEDUCTION = 'return_deduction',
+  ADMIN_DIRECT = 'admin_direct',
 }
 
 @Entity('inventory_records')
@@ -60,6 +61,9 @@ export class InventoryRecord {
 
   @Column({ type: 'text', nullable: true })
   remark: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  rejectionReason: string | null;
 
   @Column({ type: 'timestamp', nullable: true })
   reviewedAt: Date | null;

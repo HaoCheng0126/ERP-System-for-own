@@ -1,15 +1,17 @@
 import { Response } from 'express';
 import { AppDataSource } from '../config/database';
-import { InventoryRecord, InventoryRecordStatus, InventoryRecordSubmissionMode, Customer, Product, ProductType } from '../entities';
+import { InventoryRecord, InventoryRecordStatus, InventoryRecordSubmissionMode, Customer, Product, ProductType, SalaryDeduction } from '../entities';
 import { AuthRequest } from '../middlewares/auth';
 import { Between } from '../lib/typeorm';
 import { accountingService } from '../services/accountingService';
 
-// 产量/产值/近期记录统计排除「退货扣款」负数记录（只影响工资，不是真正的生产入库）
+// 产量/产值/近期记录统计排除「退货扣款」负数记录与「直接入库」（不计工资、非员工生产）
 const isProductionRecord = (record: InventoryRecord) =>
-  record.submissionMode !== InventoryRecordSubmissionMode.RETURN_DEDUCTION;
+  record.submissionMode !== InventoryRecordSubmissionMode.RETURN_DEDUCTION &&
+  record.submissionMode !== InventoryRecordSubmissionMode.ADMIN_DIRECT;
 
 const inventoryRepository = AppDataSource.getRepository(InventoryRecord);
+const deductionRepository = AppDataSource.getRepository(SalaryDeduction);
 const customerRepository = AppDataSource.getRepository(Customer);
 const productRepository = AppDataSource.getRepository(Product);
 
@@ -297,8 +299,10 @@ export const getEmployeeStats = async (req: AuthRequest, res: Response) => {
             createdAt: Between(startOfMonth, endOfMonth)
         }
     });
-    const currentMonthWage = currentMonthRecords.reduce((sum, record) => sum + Number(record.totalAmount), 0);
-    const approvedMonthCount = currentMonthRecords.length;
+    // 工资口径与工资报表一致：排除「直接入库(不计工资)」与退货扣款记录
+    const currentMonthProduction = currentMonthRecords.filter(isProductionRecord);
+    const currentMonthWage = currentMonthProduction.reduce((sum, record) => sum + Number(record.totalAmount), 0);
+    const approvedMonthCount = currentMonthProduction.length;
 
     // Last Month Wage (Approved)
     const lastMonthRecords = await inventoryRepository.find({
@@ -308,7 +312,7 @@ export const getEmployeeStats = async (req: AuthRequest, res: Response) => {
             createdAt: Between(startOfLastMonth, endOfLastMonth)
         }
     });
-    const lastMonthWage = lastMonthRecords.reduce((sum, record) => sum + Number(record.totalAmount), 0);
+    const lastMonthWage = lastMonthRecords.filter(isProductionRecord).reduce((sum, record) => sum + Number(record.totalAmount), 0);
 
     // Counts
     const pendingCount = await inventoryRepository.count({
@@ -333,13 +337,112 @@ export const getEmployeeStats = async (req: AuthRequest, res: Response) => {
       wageChangePercentage = 100;
     }
 
+    // ===== 所选周期（今日 / 本月 / 本年 / 指定 YYYY-MM）=====
+    const round = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
+    const period = (req.query.period as string) || 'month';
+    const monthParam = req.query.month as string | undefined;
+    let periodStart: Date;
+    let periodEnd: Date;
+    let periodLabel: string;
+    if (monthParam) {
+      const [py, pm] = monthParam.split('-').map(Number);
+      periodStart = new Date(py, pm - 1, 1);
+      periodEnd = new Date(py, pm, 0, 23, 59, 59, 999);
+      periodLabel = `${py}年${pm}月`;
+    } else if (period === 'today') {
+      periodStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+      periodEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+      periodLabel = '今日';
+    } else if (period === 'year') {
+      periodStart = new Date(today.getFullYear(), 0, 1);
+      periodEnd = new Date(today.getFullYear(), 11, 31, 23, 59, 59, 999);
+      periodLabel = '本年';
+    } else {
+      periodStart = startOfMonth;
+      periodEnd = endOfMonth;
+      periodLabel = '本月';
+    }
+
+    const periodApprovedAll = await inventoryRepository.find({
+      where: { submitter: { id: userId }, status: InventoryRecordStatus.APPROVED, createdAt: Between(periodStart, periodEnd) },
+      relations: ['product'],
+    });
+    // 排除直接入库/退货扣款，使产值、产品明细、净工资口径与工资报表一致
+    const periodApproved = periodApprovedAll.filter(isProductionRecord);
+    const periodApprovedWage = round(periodApproved.reduce((s, r) => s + Number(r.totalAmount), 0));
+
+    const breakdownMap = new Map<string, { productName: string; specification: string; quantity: number; wage: number }>();
+    for (const r of periodApproved) {
+      const ex = breakdownMap.get(r.productId) || {
+        productName: r.product?.name || '未知产品',
+        specification: r.product?.specification || '',
+        quantity: 0,
+        wage: 0,
+      };
+      ex.quantity = round(ex.quantity + Number(r.quantity));
+      ex.wage = round(ex.wage + Number(r.totalAmount));
+      breakdownMap.set(r.productId, ex);
+    }
+    const productBreakdown = Array.from(breakdownMap.values()).sort((a, b) => b.wage - a.wage);
+
+    const periodPending = await inventoryRepository.find({
+      where: { submitter: { id: userId }, status: InventoryRecordStatus.PENDING, createdAt: Between(periodStart, periodEnd) },
+    });
+    const periodPendingWage = round(periodPending.reduce((s, r) => s + Number(r.totalAmount), 0));
+    const periodRejectedCount = await inventoryRepository.count({
+      where: { submitter: { id: userId }, status: InventoryRecordStatus.REJECTED, createdAt: Between(periodStart, periodEnd) },
+    });
+    const periodSubmittedCount = await inventoryRepository.count({
+      where: { submitter: { id: userId }, createdAt: Between(periodStart, periodEnd) },
+    });
+
+    // 所选周期扣款合计
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const periodStartDate = `${periodStart.getFullYear()}-${pad(periodStart.getMonth() + 1)}-${pad(periodStart.getDate())}`;
+    const periodEndDate = `${periodEnd.getFullYear()}-${pad(periodEnd.getMonth() + 1)}-${pad(periodEnd.getDate())}`;
+    const periodDeductionRecords = await deductionRepository
+      .createQueryBuilder('d')
+      .where('d.employeeId = :uid', { uid: userId })
+      .andWhere('d.deductionDate >= :ds AND d.deductionDate <= :de', { ds: periodStartDate, de: periodEndDate })
+      .getMany();
+    const periodDeductions = round(periodDeductionRecords.reduce((s, d) => s + Number(d.amount), 0));
+
+    // 最近 6 个月「已结工价」走势
+    const trend: { month: string; wage: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const m = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      const ms = new Date(m.getFullYear(), m.getMonth(), 1);
+      const me = new Date(m.getFullYear(), m.getMonth() + 1, 0, 23, 59, 59, 999);
+      const recs = await inventoryRepository.find({
+        where: { submitter: { id: userId }, status: InventoryRecordStatus.APPROVED, createdAt: Between(ms, me) },
+      });
+      trend.push({
+        month: `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`,
+        wage: round(recs.filter(isProductionRecord).reduce((s, r) => s + Number(r.totalAmount), 0)),
+      });
+    }
+
     res.json({
       pendingCount,
       rejectedCount,
       approvedMonthCount,
-      currentMonthWage,
-      lastMonthWage,
-      wageChangePercentage
+      currentMonthWage: round(currentMonthWage),
+      lastMonthWage: round(lastMonthWage),
+      wageChangePercentage,
+      period: monthParam || period,
+      periodLabel,
+      periodApprovedWage,
+      periodPendingWage,
+      periodCounts: {
+        submitted: periodSubmittedCount,
+        approved: periodApproved.length,
+        rejected: periodRejectedCount,
+        pending: periodPending.length,
+      },
+      productBreakdown,
+      trend,
+      periodDeductions,
+      periodNetSalary: round(periodApprovedWage - periodDeductions),
     });
 
   } catch (error) {

@@ -11,7 +11,7 @@ import QueryStateBanner from '../components/QueryStateBanner';
 import ProductAutocomplete from '../components/ProductAutocomplete';
 import QuickCreateProductForm, { QuickCreateProductDraft } from '../components/QuickCreateProductForm';
 import { CustomerType, Product, PurchaseOrder } from '../types';
-import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatEditableDecimal, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatEditableDecimal, formatEditableQty, formatUnitPrice, unitLabel } from '../utils/format';
 import { getPurchaseAmount, groupPurchases } from '../utils/purchaseGrouping';
 import { DateRangeShortcut, getDateRangeByShortcut, matchesKeyword } from '../utils/filtering';
 import useDebouncedValue from '../hooks/useDebouncedValue';
@@ -186,7 +186,7 @@ const Purchase: React.FC = () => {
       supplierId: purchase.supplierId || purchase.supplierEntity?.id || '',
       productId: purchase.productId || purchase.product?.id || '',
       item: purchase.item,
-      quantity: formatEditableDecimal(purchase.quantity),
+      quantity: formatEditableQty(purchase.quantity),
       unit: purchase.unit || '个',
       unitPrice: formatEditableDecimal(purchase.unitPrice),
       remark: purchase.remark || '',
@@ -578,8 +578,7 @@ const Purchase: React.FC = () => {
                                     <thead>
                                       <tr className="border-b border-line bg-canvas text-ink-tertiary">
                                         <th className="px-4 py-2.5 text-left text-xs font-medium">品名</th>
-                                        <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
-                                        <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                                        <th className="px-4 py-2.5 text-right text-xs font-medium">数量{unitLabel(dateGroup.purchases.map(p => p.unit))}</th>
                                         <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
                                         <th className="px-4 py-2.5 text-right text-xs font-medium">总金额</th>
                                         <th className="px-4 py-2.5 text-left text-xs font-medium">备注</th>
@@ -593,7 +592,6 @@ const Purchase: React.FC = () => {
                                           <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                             {formatDisplayDecimal(purchase.quantity, 4)}
                                           </td>
-                                          <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">{purchase.unit || '-'}</td>
                                           <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                             {formatUnitPrice(purchase.unitPrice)}
                                           </td>
@@ -713,8 +711,7 @@ const Purchase: React.FC = () => {
                     <tr>
                       <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">日期</th>
                       <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">品名</th>
-                      <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">数量</th>
-                      <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">单位</th>
+                      <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">数量{unitLabel(printablePurchase.supplierGroup.purchases.map(p => p.unit))}</th>
                       <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">单价</th>
                       <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">总金额</th>
                       <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">备注</th>
@@ -729,9 +726,6 @@ const Purchase: React.FC = () => {
                         <td className="border border-gray-900 px-3 py-3 text-sm text-gray-900">{purchase.item}</td>
                         <td className="border border-gray-900 px-2 py-3 text-right text-sm text-gray-900">
                           {formatDisplayDecimal(purchase.quantity, 4)}
-                        </td>
-                        <td className="border border-gray-900 px-2 py-3 text-center text-sm text-gray-700">
-                          {purchase.unit || '-'}
                         </td>
                         <td className="border border-gray-900 px-2 py-3 text-right text-sm text-gray-900">
                           {formatUnitPrice(purchase.unitPrice)}

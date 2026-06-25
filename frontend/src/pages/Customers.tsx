@@ -8,13 +8,10 @@ import Layout from '../components/Layout';
 import { MobileActionBar, MobileField, MobileFieldGrid, MobileRecordCard } from '../components/MobileRecordCard';
 import PageHeader from '../components/PageHeader';
 import api from '../utils/api';
-import { formatAmount } from '../utils/format';
-import { isNonZeroAmount, matchesKeyword } from '../utils/filtering';
+import { matchesKeyword } from '../utils/filtering';
 import useDebouncedValue from '../hooks/useDebouncedValue';
 import { Customer, CustomerType } from '../types';
 import { useCounterparties } from '../hooks/useCounterparties';
-
-type BalanceFilter = 'all' | 'hasBalance' | 'noBalance';
 
 const Customers: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
@@ -31,7 +28,6 @@ const Customers: React.FC = () => {
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>('all');
   const [newGroupName, setNewGroupName] = useState<string>('');
   const [showNewGroupInput, setShowNewGroupInput] = useState(false);
   const debouncedSearchTerm = useDebouncedValue(searchTerm);
@@ -45,11 +41,6 @@ const Customers: React.FC = () => {
   const filteredCustomers = customers?.filter((customer: Customer) => {
     const groupMatch = selectedGroup === 'all' || customer.group === selectedGroup;
     const typeMatch = selectedType === 'all' || customer.type === selectedType;
-    const balanceValue = Number(customer.initialBalance || 0);
-    const balanceMatch =
-      balanceFilter === 'all' ||
-      (balanceFilter === 'hasBalance' && isNonZeroAmount(balanceValue)) ||
-      (balanceFilter === 'noBalance' && !isNonZeroAmount(balanceValue));
     const keywordMatch = matchesKeyword(debouncedSearchTerm, [
       customer.code,
       customer.name,
@@ -58,14 +49,13 @@ const Customers: React.FC = () => {
       customer.address,
       customer.group,
     ]);
-    return groupMatch && typeMatch && balanceMatch && keywordMatch;
+    return groupMatch && typeMatch && keywordMatch;
   });
 
   const clearFilters = () => {
     setSelectedType('all');
     setSelectedGroup('all');
     setSearchTerm('');
-    setBalanceFilter('all');
   };
 
   const activeFilters: ActiveFilter[] = [
@@ -88,13 +78,6 @@ const Customers: React.FC = () => {
           key: 'group',
           label: `分组: ${selectedGroup}`,
           onRemove: () => setSelectedGroup('all'),
-        }
-      : null,
-    balanceFilter !== 'all'
-      ? {
-          key: 'balance',
-          label: `结余: ${balanceFilter === 'hasBalance' ? '有结余' : '无结余'}`,
-          onRemove: () => setBalanceFilter('all'),
         }
       : null,
   ].filter((item): item is ActiveFilter => Boolean(item));
@@ -200,7 +183,7 @@ const Customers: React.FC = () => {
                   <SearchInput
                     value={searchTerm}
                     onChange={setSearchTerm}
-                    placeholder="客户编号、名称、联系人、电话"
+                    placeholder="名称、联系人、电话"
                   />
                 </FilterField>
                 <FilterField label="类型" className="lg:w-40">
@@ -230,17 +213,6 @@ const Customers: React.FC = () => {
                     ))}
                   </select>
                 </FilterField>
-                <FilterField label="结余款项" className="lg:w-40">
-                  <select
-                    value={balanceFilter}
-                    onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)}
-                    className="block min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500"
-                  >
-                    <option value="all">全部</option>
-                    <option value="hasBalance">有结余</option>
-                    <option value="noBalance">无结余</option>
-                  </select>
-                </FilterField>
               </>
             }
           />
@@ -266,13 +238,11 @@ const Customers: React.FC = () => {
             <table className="min-w-[800px] w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">编码</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">名称</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分组</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">联系人</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">电话</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">结余款项</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">地址</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
@@ -282,7 +252,6 @@ const Customers: React.FC = () => {
                   <tr key={customer.id}>
                     {editingCustomer?.id === customer.id ? (
                       <>
-                        <td className="px-6 py-4 whitespace-nowrap font-medium">{customer.code}</td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <select
                             value={editingCustomer.type}
@@ -331,15 +300,6 @@ const Customers: React.FC = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <input
-                            type="number"
-                            step="0.01"
-                            value={editingCustomer.initialBalance ?? 0}
-                            onChange={(e) => setEditingCustomer({ ...editingCustomer, initialBalance: Number(e.target.value || 0) })}
-                            className="w-32 px-3 py-2 text-right border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                          />
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <input
                             type="text"
                             value={editingCustomer.address}
                             onChange={(e) => setEditingCustomer({ ...editingCustomer, address: e.target.value })}
@@ -363,7 +323,6 @@ const Customers: React.FC = () => {
                       </>
                     ) : (
                       <>
-                        <td className="px-6 py-4 whitespace-nowrap font-medium">{customer.code}</td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                             customer.type === CustomerType.CLIENT 
@@ -381,7 +340,6 @@ const Customers: React.FC = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">{customer.contactPerson || '-'}</td>
                         <td className="px-6 py-4 whitespace-nowrap">{customer.phone || '-'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right font-medium text-gray-900">¥{formatAmount(customer.initialBalance || 0)}</td>
                         <td className="px-6 py-4 whitespace-nowrap">{customer.address || '-'}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <button
@@ -440,14 +398,6 @@ const Customers: React.FC = () => {
                         placeholder="电话"
                       />
                       <input
-                        type="number"
-                        step="0.01"
-                        value={editingCustomer.initialBalance ?? 0}
-                        onChange={(e) => setEditingCustomer({ ...editingCustomer, initialBalance: Number(e.target.value || 0) })}
-                        className="min-h-11 rounded-md border border-gray-300 px-3 py-2 text-right text-sm"
-                        placeholder="结余款项"
-                      />
-                      <input
                         type="text"
                         value={editingCustomer.address}
                         onChange={(e) => setEditingCustomer({ ...editingCustomer, address: e.target.value })}
@@ -477,7 +427,7 @@ const Customers: React.FC = () => {
                     <div className="mb-3 flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-base font-semibold text-gray-900">{customer.name}</div>
-                        <div className="mt-1 text-sm text-gray-500">{customer.code} · {customer.group || '默认'}</div>
+                        <div className="mt-1 text-sm text-gray-500">{customer.group || '默认'}</div>
                       </div>
                       <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${
                         customer.type === CustomerType.CLIENT ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
@@ -488,8 +438,7 @@ const Customers: React.FC = () => {
                     <MobileFieldGrid>
                       <MobileField label="联系人" value={customer.contactPerson || '-'} />
                       <MobileField label="电话" value={customer.phone || '-'} align="right" />
-                      <MobileField label="结余款项" value={`¥${formatAmount(customer.initialBalance || 0)}`} />
-                      <MobileField label="地址" value={customer.address || '-'} align="right" />
+                      <MobileField label="地址" value={customer.address || '-'} />
                     </MobileFieldGrid>
                     <MobileActionBar>
                       <button

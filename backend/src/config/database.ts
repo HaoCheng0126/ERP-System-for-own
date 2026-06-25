@@ -16,6 +16,7 @@ import { StockAdjustment } from '../entities/StockAdjustment';
 import { ReturnOrder } from '../entities/ReturnOrder';
 import { ReturnOrderItem } from '../entities/ReturnOrderItem';
 import { SystemSetting } from '../entities/SystemSetting';
+import { SalaryDeduction } from '../entities/SalaryDeduction';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -43,6 +44,7 @@ export const AppDataSource = new DataSource({
     ReturnOrder,
     ReturnOrderItem,
     SystemSetting,
+    SalaryDeduction,
   ],
   migrations: [__dirname + '/../migrations/*.{ts,js}'],
   subscribers: [],

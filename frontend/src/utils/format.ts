@@ -33,6 +33,14 @@ export const formatEditableDecimal = (
   return parsed.toFixed(decimals);
 };
 
+// 数量字段专用：整数显示无小数点（"6" 而非 "6.0000"），有效小数去除末尾零。
+export const formatEditableQty = (value: number | string | null | undefined): string => {
+  if (value === null || value === undefined || value === '') return '';
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  return formatDisplayDecimal(parsed, 4);
+};
+
 export const formatUnitPrice = (value: number | string | null | undefined) => {
   return formatDisplayDecimal(value, 4);
 };
@@ -45,4 +53,10 @@ export const formatAmount = (value: number | string | null | undefined) => {
 // 详情/明细用：展示完整的 4 位小数精度（单价可能是 4 位小数，金额=数量×单价）。
 export const formatAmountDetail = (value: number | string | null | undefined) => {
   return formatDisplayDecimal(value, 4);
+};
+
+// 当一组行的单位唯一时，返回 "（unit）" 作为列名后缀；否则返回空字符串。
+export const unitLabel = (units: (string | undefined | null)[]): string => {
+  const unique = [...new Set(units.filter((u): u is string => Boolean(u)))];
+  return unique.length === 1 ? `（${unique[0]}）` : '';
 };

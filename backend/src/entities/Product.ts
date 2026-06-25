@@ -39,6 +39,10 @@ export class Product {
   @Column('decimal', { precision: 12, scale: 4, default: 0, transformer: new ColumnNumericTransformer() })
   stock: number;
 
+  // 安全库存阈值：库存 ≤ 此值即触发仪表盘「库存预警」。为空表示不预警。
+  @Column('decimal', { precision: 12, scale: 4, nullable: true, transformer: new ColumnNumericTransformer() })
+  lowStockThreshold: number | null;
+
   @Column({ default: true })
   isActive: boolean;
 

@@ -8,6 +8,7 @@ interface DeliveryPickerProps {
   value: string;
   onSelect: (deliveryOrderId: string) => void;
   disabled?: boolean;
+  returnedIds?: Set<string>;
 }
 
 // 退货时选「关联送货单」用：送货单多时按产品/日期/单号搜索，每条显示日期+产品摘要+金额，
@@ -19,7 +20,7 @@ const summarizeItems = (order: DeliveryOrder) => {
   return `${names[0]} 等${names.length}项`;
 };
 
-const DeliveryPicker = ({ deliveries, value, onSelect, disabled }: DeliveryPickerProps) => {
+const DeliveryPicker = ({ deliveries, value, onSelect, disabled, returnedIds }: DeliveryPickerProps) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const ref = useRef<HTMLDivElement>(null);
@@ -66,6 +67,9 @@ const DeliveryPicker = ({ deliveries, value, onSelect, disabled }: DeliveryPicke
               <span className="text-ink-tertiary">{selected.deliveryDate} · </span>
               {summarizeItems(selected)}
               <span className="text-ink-tertiary"> · ¥{formatAmount(selected.totalAmount)}</span>
+              {returnedIds?.has(selected.id) && (
+                <span className="ml-1.5 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-500">已退货</span>
+              )}
             </>
           ) : (
             <span className="text-ink-tertiary">不关联（手动选产品）</span>
@@ -116,7 +120,12 @@ const DeliveryPicker = ({ deliveries, value, onSelect, disabled }: DeliveryPicke
                   }`}
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-ink">{summarizeItems(order)}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-ink">{summarizeItems(order)}</span>
+                      {returnedIds?.has(order.id) && (
+                        <span className="shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-500">已退货</span>
+                      )}
+                    </div>
                     <div className="mt-0.5 text-xs text-ink-tertiary">
                       {order.deliveryDate} · {order.orderNumber}
                     </div>

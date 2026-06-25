@@ -46,6 +46,7 @@ export interface Product {
   costPrice: number;
   basePrice?: number;
   stock?: number;
+  lowStockThreshold?: number | null;
   isActive: boolean;
   productPrices?: ProductPrice[];
   createdAt: string;
@@ -96,6 +97,7 @@ export enum InventoryRecordSubmissionMode {
   EMPLOYEE_SUBMIT = 'employee_submit',
   ADMIN_ASSIGN = 'admin_assign',
   RETURN_DEDUCTION = 'return_deduction',
+  ADMIN_DIRECT = 'admin_direct',
 }
 
 // 入库单类型
@@ -111,6 +113,7 @@ export interface InventoryRecord {
   status: InventoryRecordStatus;
   submissionMode: InventoryRecordSubmissionMode;
   remark?: string | null;
+  rejectionReason?: string | null;
   reviewedAt?: string | null;
   product?: Product;
   submitter?: User;
@@ -150,6 +153,7 @@ export interface DeliveryOrder {
   remark?: string;
   customer?: Customer;
   items: DeliveryOrderItem[];
+  returnedAmount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -208,19 +212,54 @@ export interface LoginResponse {
   user: User;
 }
 
+// 工资扣款类型
+export enum SalaryDeductionType {
+  RETURN = 'return',
+  LEAVE = 'leave',
+  OTHER = 'other',
+}
+
+export const SalaryDeductionTypeLabel: Record<string, string> = {
+  return: '退货扣款',
+  leave: '请假扣款',
+  other: '其他扣款',
+};
+
+export interface SalaryDeduction {
+  id: string;
+  employeeId: string;
+  type: string;
+  amount: number;
+  quantity?: number | null;
+  unitPrice?: number | null;
+  reason?: string | null;
+  returnOrderId?: string | null;
+  deductionDate: string;
+  createdBy: string;
+  employee?: User;
+  returnOrder?: ReturnOrder | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // 工资报表类型
 export interface SalaryReportItem {
   user: User;
-  totalAmount: number;
+  grossAmount: number;
+  totalDeductions: number;
+  netSalary: number;
   totalQuantity: number;
   records: InventoryRecord[];
+  deductions: SalaryDeduction[];
 }
 
 export interface SalaryReport {
   report: SalaryReportItem[];
   summary: {
     totalRecords: number;
-    totalAmount: number;
+    totalGrossAmount: number;
+    totalDeductions: number;
+    totalNetSalary: number;
     totalQuantity: number;
   };
 }
@@ -266,6 +305,7 @@ export interface ReturnOrderItem {
   deductEmployeeId?: string | null;
   deductQuantity: number;
   deductInventoryRecordId?: string | null;
+  deductionCount: number;
   product?: Product;
 }
 
@@ -280,6 +320,7 @@ export interface ReturnOrder {
   customer?: Customer;
   deliveryOrder?: DeliveryOrder | null;
   items: ReturnOrderItem[];
+  deductions?: SalaryDeduction[];
   createdAt: string;
   updatedAt: string;
 }

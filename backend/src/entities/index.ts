@@ -14,3 +14,4 @@ export * from './StockAdjustment';
 export * from './ReturnOrder';
 export * from './ReturnOrderItem';
 export * from './SystemSetting';
+export * from './SalaryDeduction';

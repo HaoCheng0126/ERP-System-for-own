@@ -4,6 +4,8 @@ import DashboardKpiStrip from '../components/dashboard/DashboardKpiStrip';
 import BusinessTrend from '../components/dashboard/BusinessTrend';
 import ProductGrowthPanel from '../components/dashboard/ProductGrowthPanel';
 import CounterpartyRanking from '../components/dashboard/CounterpartyRanking';
+import EmployeeRanking from '../components/dashboard/EmployeeRanking';
+import StockAlertPanel from '../components/dashboard/StockAlertPanel';
 import RecentActivity from '../components/dashboard/RecentActivity';
 import PeriodToggle, { DashboardPeriod } from '../components/dashboard/PeriodToggle';
 import { CustomerType } from '../types';
@@ -85,6 +87,12 @@ const Dashboard: React.FC = () => {
           <ProductGrowthPanel />
           <CounterpartyRanking type={CustomerType.CLIENT} />
           <CounterpartyRanking type={CustomerType.SUPPLIER} />
+        </div>
+
+        {/* 员工产量排行 + 库存预警 */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <EmployeeRanking />
+          <StockAlertPanel />
         </div>
 
         {/* 最近入库动态 */}

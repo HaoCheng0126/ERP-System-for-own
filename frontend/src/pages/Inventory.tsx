@@ -11,7 +11,7 @@ import ProductAutocomplete from '../components/ProductAutocomplete';
 import ActionableEmptyState from '../components/ActionableEmptyState';
 import QueryStateBanner from '../components/QueryStateBanner';
 import api from '../utils/api';
-import { formatAmount, formatAmountDetail, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatUnitPrice, unitLabel } from '../utils/format';
 import { DateRangeShortcut, getDateRangeByShortcut } from '../utils/filtering';
 import {
   InventoryRecord,
@@ -73,10 +73,11 @@ const Inventory: React.FC = () => {
     }
   });
   const [selectedSubmitterId, setSelectedSubmitterId] = useState<string>(currentUser?.id || '');
-  const [reviewData, setReviewData] = useState<{ status: InventoryRecordStatus; quantity: string | number; remark: string }>({
+  const [reviewData, setReviewData] = useState<{ status: InventoryRecordStatus; quantity: string | number; remark: string; rejectionReason: string }>({
     status: InventoryRecordStatus.APPROVED,
     quantity: '',
     remark: '',
+    rejectionReason: '',
   });
 
   const openAddModal = () => {
@@ -139,12 +140,20 @@ const Inventory: React.FC = () => {
     filterDateRange.endDate,
     filterStatus,
   ]);
-  const selectableFilteredRecords = filteredRecords.filter(
-    (record: InventoryRecord) => record.status === InventoryRecordStatus.PENDING
-  );
-  const areAllSelectableRecordsSelected =
-    selectableFilteredRecords.length > 0 &&
-    selectableFilteredRecords.every((record: InventoryRecord) => selectedRecordIds.has(record.id));
+  // 按提交日期分组（倒序），列表以日期分段展示。
+  const groupedByDate = useMemo(() => {
+    const map = new Map<string, InventoryRecord[]>();
+    for (const record of filteredRecords as InventoryRecord[]) {
+      const d = new Date(record.createdAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const list = map.get(key) || [];
+      list.push(record);
+      map.set(key, list);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([date, records]) => ({ date, records }));
+  }, [filteredRecords]);
 
   // 获取产品列表 (用于筛选)
   const { data: products } = useQuery({
@@ -339,6 +348,7 @@ const Inventory: React.FC = () => {
         status: InventoryRecordStatus.APPROVED,
         quantity: '',
         remark: '',
+        rejectionReason: '',
       });
     },
     onError: (error: any) => {
@@ -552,6 +562,7 @@ const Inventory: React.FC = () => {
       status: InventoryRecordStatus.APPROVED,
       quantity: record.quantity,
       remark: '',
+      rejectionReason: '',
     });
     setShowReviewModal(true);
   };
@@ -585,22 +596,6 @@ const Inventory: React.FC = () => {
       newSet.add(record.id);
     }
     setSelectedRecordIds(newSet);
-  };
-
-  const selectAll = () => {
-    if (selectableFilteredRecords.length === 0) {
-      setErrorModalTitle('没有可审核记录');
-      setErrorModalMessage('当前筛选结果中没有待审核的入库单。');
-      return;
-    }
-
-    const next = new Set(selectedRecordIds);
-    if (areAllSelectableRecordsSelected) {
-      selectableFilteredRecords.forEach((record: InventoryRecord) => next.delete(record.id));
-    } else {
-      selectableFilteredRecords.forEach((record: InventoryRecord) => next.add(record.id));
-    }
-    setSelectedRecordIds(next);
   };
 
   const handleBatchReview = (status: InventoryRecordStatus) => {
@@ -688,6 +683,8 @@ const Inventory: React.FC = () => {
     switch (mode) {
       case InventoryRecordSubmissionMode.ADMIN_ASSIGN:
         return '管理员分配';
+      case InventoryRecordSubmissionMode.ADMIN_DIRECT:
+        return '直接入库';
       case InventoryRecordSubmissionMode.RETURN_DEDUCTION:
         return '退货扣款';
       case InventoryRecordSubmissionMode.EMPLOYEE_SUBMIT:
@@ -699,6 +696,9 @@ const Inventory: React.FC = () => {
   const getSubmissionModeBadgeClass = (mode?: InventoryRecordSubmissionMode) => {
     if (mode === InventoryRecordSubmissionMode.RETURN_DEDUCTION) {
       return 'bg-rose-100 text-rose-700';
+    }
+    if (mode === InventoryRecordSubmissionMode.ADMIN_DIRECT) {
+      return 'bg-violet-100 text-violet-700';
     }
     return mode === InventoryRecordSubmissionMode.ADMIN_ASSIGN
       ? 'bg-blue-100 text-blue-800'
@@ -729,7 +729,7 @@ const Inventory: React.FC = () => {
           errorText="入库记录暂时无法同步，请确认后端服务已启动。"
           onRetry={() => refetch()}
         />
-        <div className="-mx-4 overflow-hidden border-b border-line bg-white md:-mx-6">
+        <div className="-mx-4 border-b border-line bg-white md:-mx-6">
           <FilterPanel
             totalCount={(inventoryRecords || []).length}
             filteredCount={filteredRecords.length}
@@ -823,14 +823,16 @@ const Inventory: React.FC = () => {
               </>
             }
             actions={
-              <button
-                onClick={handleExport}
-                disabled={filteredRecords.length === 0}
-                className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                导出
-              </button>
+              isAdmin ? (
+                <button
+                  onClick={handleExport}
+                  disabled={filteredRecords.length === 0}
+                  className="inline-flex min-h-11 items-center justify-center rounded-md border border-transparent bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  导出
+                </button>
+              ) : undefined
             }
           />
 
@@ -878,42 +880,62 @@ const Inventory: React.FC = () => {
             </div>
           ) : filteredRecords.length > 0 ? (
           <>
-          <div className="hidden overflow-x-auto md:block">
-            <table className="min-w-[1000px] w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  {getUserRole() !== UserRole.PIECE_RATE && (
-                    <th className="px-6 py-3 w-12 text-center">
-                      <button 
-                        onClick={selectAll}
-                        className="text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300"
-                        disabled={selectableFilteredRecords.length === 0}
-                        title={selectableFilteredRecords.length === 0 ? '当前没有待审核记录' : '选择当前筛选中的待审核记录'}
-                      >
-                        {areAllSelectableRecordsSelected ? (
-                          <CheckSquare className="w-5 h-5 text-blue-600" />
-                        ) : (
-                          <Square className="w-5 h-5" />
+          <div className="hidden md:block">
+            {groupedByDate.map((group) => (
+              <div key={group.date} className="border-b border-gray-100 last:border-b-0">
+                <div className="bg-gray-50/80 px-6 py-2 text-xs font-semibold text-gray-600">
+                  {group.date}
+                  <span className="ml-2 font-normal text-gray-400">{group.records.length} 条</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-[900px] w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        {getUserRole() !== UserRole.PIECE_RATE && (() => {
+                          const groupPending = group.records.filter(r => r.status === InventoryRecordStatus.PENDING);
+                          const allGroupSelected = groupPending.length > 0 && groupPending.every(r => selectedRecordIds.has(r.id));
+                          return (
+                            <th className="px-6 py-3 w-12 text-center">
+                              <button
+                                onClick={() => {
+                                  const next = new Set(selectedRecordIds);
+                                  if (allGroupSelected) {
+                                    groupPending.forEach(r => next.delete(r.id));
+                                  } else {
+                                    groupPending.forEach(r => next.add(r.id));
+                                  }
+                                  setSelectedRecordIds(next);
+                                }}
+                                className="text-gray-500 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-300"
+                                disabled={groupPending.length === 0}
+                                title={groupPending.length === 0 ? '当日没有待审核记录' : `选择 ${group.date} 的待审核记录`}
+                              >
+                                {allGroupSelected ? (
+                                  <CheckSquare className="w-5 h-5 text-blue-600" />
+                                ) : (
+                                  <Square className="w-5 h-5" />
+                                )}
+                              </button>
+                            </th>
+                          );
+                        })()}
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">产品/规格</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">数量{unitLabel(group.records.map((r: InventoryRecord) => r.product?.unit))}</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">单价</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">总金额</th>
+                        {getUserRole() !== UserRole.PIECE_RATE && (
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">提交人</th>
                         )}
-                      </button>
-                    </th>
-                  )}
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">入库单编号</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">产品名称</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">规格</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">数量</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">单位</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">单价</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">总金额</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">提交人</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">来源</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">备注</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredRecords.map((record: InventoryRecord) => (
+                        {getUserRole() !== UserRole.PIECE_RATE && (
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">来源</th>
+                        )}
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">备注</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                    {group.records.map((record: InventoryRecord) => (
                   <tr key={record.id}>
                     {getUserRole() !== UserRole.PIECE_RATE && (
                       <td className="px-6 py-4 whitespace-nowrap text-center">
@@ -925,30 +947,24 @@ const Inventory: React.FC = () => {
                         >
                           {selectedRecordIds.has(record.id) ? (
                             <CheckSquare className="w-5 h-5 text-blue-600" />
+                          ) : record.status === InventoryRecordStatus.PENDING ? (
+                            <Square className="w-5 h-5 text-gray-700" />
                           ) : (
-                            <Square className={`w-5 h-5 ${
-                              record.status === InventoryRecordStatus.PENDING ? 'text-gray-300' : 'text-gray-200'
-                            }`} />
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-300">
+                              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                              <line x1="3" y1="21" x2="21" y2="3"/>
+                            </svg>
                           )}
                         </button>
                       </td>
                     )}
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
-                        {record.recordNumber || `#${record.id.slice(0, 8)}`}
+                      <div className="text-sm text-gray-900">
+                        {[record.product?.name, record.product?.specification].filter(Boolean).join(' ')}
                       </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{record.product?.name}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">{record.product?.specification}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">
                       {record.quantity}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {record.product?.unit}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">
                       ¥{formatUnitPrice(record.unitPrice)}
@@ -956,26 +972,37 @@ const Inventory: React.FC = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900">
                       ¥{formatAmountDetail(record.totalAmount)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {record.submitter?.name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSubmissionModeBadgeClass(record.submissionMode)}`}>
-                        {getSubmissionModeText(record.submissionMode)}
-                      </span>
-                    </td>
+                    {getUserRole() !== UserRole.PIECE_RATE && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {record.submitter?.name}
+                      </td>
+                    )}
+                    {getUserRole() !== UserRole.PIECE_RATE && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getSubmissionModeBadgeClass(record.submissionMode)}`}>
+                          {getSubmissionModeText(record.submissionMode)}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadgeClass(record.status)}`}>
                         {getStatusText(record.status)}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
-                      <div className="max-w-[180px] truncate" title={record.remark || ''}>
-                        {record.remark || '-'}
-                      </div>
+                      {record.status === InventoryRecordStatus.REJECTED && record.rejectionReason ? (
+                        <div className="max-w-[180px]">
+                          <span className="text-red-600 font-medium text-xs">驳回原因：</span>
+                          <span className="truncate block" title={record.rejectionReason}>{record.rejectionReason}</span>
+                        </div>
+                      ) : (
+                        <div className="max-w-[180px] truncate" title={record.remark || ''}>
+                          {record.remark || '-'}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      {record.status === InventoryRecordStatus.PENDING && (
+                      {isAdmin && record.status === InventoryRecordStatus.PENDING && (
                         <button
                           onClick={() => handleOpenReviewModal(record)}
                           className="text-blue-600 hover:text-blue-900"
@@ -984,16 +1011,7 @@ const Inventory: React.FC = () => {
                           <FileText className="w-5 h-5" />
                         </button>
                       )}
-                      {record.status === InventoryRecordStatus.REJECTED && userRole !== UserRole.ADMIN && (
-                        <button
-                          onClick={() => handleOpenEditModal(record)}
-                          className="text-blue-600 hover:text-blue-900 ml-2"
-                          title="修改并重新提交"
-                        >
-                          <Edit className="w-5 h-5" />
-                        </button>
-                      )}
-                      {userRole === UserRole.ADMIN && record.status === InventoryRecordStatus.APPROVED && (
+                      {isAdmin && record.status === InventoryRecordStatus.APPROVED && (
                         <button
                           onClick={() => handleOpenEditModal(record)}
                           className="text-blue-600 hover:text-blue-900 ml-2"
@@ -1002,7 +1020,7 @@ const Inventory: React.FC = () => {
                           <Edit className="w-5 h-5" />
                         </button>
                       )}
-                      {userRole === UserRole.ADMIN && record.status === InventoryRecordStatus.APPROVED && (
+                      {isAdmin && record.status === InventoryRecordStatus.APPROVED && (
                         <button
                           onClick={() => handleDeleteInventory(record)}
                           className="text-red-600 hover:text-red-900 ml-2"
@@ -1011,22 +1029,48 @@ const Inventory: React.FC = () => {
                           <Trash2 className="w-5 h-5" />
                         </button>
                       )}
+                      {!isAdmin && (record.status === InventoryRecordStatus.PENDING || record.status === InventoryRecordStatus.REJECTED) && record.submittedBy === currentUser?.id && (
+                        <>
+                          {record.status === InventoryRecordStatus.REJECTED && (
+                            <button
+                              onClick={() => handleOpenEditModal(record)}
+                              className="text-blue-600 hover:text-blue-900"
+                              title="重新提交"
+                            >
+                              <Edit className="w-5 h-5" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteInventory(record)}
+                            className="text-red-600 hover:text-red-900 ml-2"
+                            title="删除"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                    ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="space-y-3 p-4 md:hidden">
-            {filteredRecords.map((record: InventoryRecord) => (
+          <div className="space-y-4 p-4 md:hidden">
+            {groupedByDate.map((group) => (
+              <div key={group.date} className="space-y-3">
+                <div className="px-1 text-xs font-semibold text-gray-600">
+                  {group.date}
+                  <span className="ml-2 font-normal text-gray-400">{group.records.length} 条</span>
+                </div>
+                {group.records.map((record: InventoryRecord) => (
               <MobileRecordCard key={record.id}>
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-base font-semibold text-gray-900">
-                      {record.recordNumber || `#${record.id.slice(0, 8)}`}
-                    </div>
-                    <div className="mt-1 text-sm text-gray-500">
-                      {record.product?.name || '-'} · {record.product?.specification || '-'}
+                      {[record.product?.name, record.product?.specification].filter(Boolean).join(' ') || '-'}
                     </div>
                   </div>
                   {getUserRole() !== UserRole.PIECE_RATE && (
@@ -1069,6 +1113,12 @@ const Inventory: React.FC = () => {
                   />
                 </MobileFieldGrid>
 
+                {record.status === InventoryRecordStatus.REJECTED && record.rejectionReason && (
+                  <div className="mt-3 border-t border-red-100 pt-3">
+                    <div className="text-xs font-medium text-red-600">驳回原因</div>
+                    <div className="mt-1 break-words text-sm text-red-700">{record.rejectionReason}</div>
+                  </div>
+                )}
                 {record.remark && (
                   <div className="mt-3 border-t border-gray-100 pt-3">
                     <div className="text-xs text-gray-500">备注</div>
@@ -1076,6 +1126,7 @@ const Inventory: React.FC = () => {
                   </div>
                 )}
 
+                {isAdmin && (
                 <MobileActionBar>
                   {record.status === InventoryRecordStatus.PENDING && (
                     <button
@@ -1086,16 +1137,7 @@ const Inventory: React.FC = () => {
                       审核
                     </button>
                   )}
-                  {record.status === InventoryRecordStatus.REJECTED && userRole !== UserRole.ADMIN && (
-                    <button
-                      onClick={() => handleOpenEditModal(record)}
-                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
-                    >
-                      <Edit className="h-4 w-4" />
-                      修改
-                    </button>
-                  )}
-                  {userRole === UserRole.ADMIN && record.status === InventoryRecordStatus.APPROVED && (
+                  {record.status === InventoryRecordStatus.APPROVED && (
                     <>
                       <button
                         onClick={() => handleOpenEditModal(record)}
@@ -1114,7 +1156,30 @@ const Inventory: React.FC = () => {
                     </>
                   )}
                 </MobileActionBar>
+                )}
+                {!isAdmin && (record.status === InventoryRecordStatus.PENDING || record.status === InventoryRecordStatus.REJECTED) && record.submittedBy === currentUser?.id && (
+                <MobileActionBar>
+                  {record.status === InventoryRecordStatus.REJECTED && (
+                    <button
+                      onClick={() => handleOpenEditModal(record)}
+                      className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-blue-100 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+                    >
+                      <Edit className="h-4 w-4" />
+                      重新提交
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDeleteInventory(record)}
+                    className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border border-red-100 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    删除
+                  </button>
+                </MobileActionBar>
+                )}
               </MobileRecordCard>
+                ))}
+              </div>
             ))}
           </div>
           </>
@@ -1161,8 +1226,7 @@ const Inventory: React.FC = () => {
                     <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">入库单编号</th>
                     <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">产品名称</th>
                     <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">规格</th>
-                    <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">数量</th>
-                    <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">单位</th>
+                    <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">数量{unitLabel(filteredRecords.map((r: InventoryRecord) => r.product?.unit))}</th>
                     <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">单价</th>
                     <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">总金额</th>
                     <th className="border border-gray-900 px-2 py-3 text-center text-sm font-semibold text-gray-900">提交人</th>
@@ -1178,7 +1242,6 @@ const Inventory: React.FC = () => {
                       <td className="border border-gray-900 px-2 py-3 text-sm text-gray-900">{record.product?.name || '-'}</td>
                       <td className="border border-gray-900 px-2 py-3 text-sm text-gray-700">{record.product?.specification || '-'}</td>
                       <td className="border border-gray-900 px-2 py-3 text-right text-sm text-gray-900">{record.quantity}</td>
-                      <td className="border border-gray-900 px-2 py-3 text-center text-sm text-gray-700">{record.product?.unit || '-'}</td>
                       <td className="border border-gray-900 px-2 py-3 text-right text-sm text-gray-900">{formatUnitPrice(record.unitPrice)}</td>
                       <td className="border border-gray-900 px-2 py-3 text-right text-sm font-medium text-gray-900">¥{formatAmountDetail(record.totalAmount)}</td>
                       <td className="border border-gray-900 px-2 py-3 text-sm text-gray-900">{record.submitter?.name || '-'}</td>
@@ -1232,6 +1295,7 @@ const Inventory: React.FC = () => {
                     onChange={(e) => setSelectedSubmitterId(e.target.value)}
                     className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                   >
+                    <option value="__direct__">直接入库（不计工资）</option>
                     {activeAssignableUsers.map((user) => (
                         <option key={user.id} value={user.id}>
                           {user.name} {user.code ? `(${user.code})` : ''}
@@ -1244,7 +1308,10 @@ const Inventory: React.FC = () => {
                 const selectedProduct = getProductById(record.productId);
                 const isNewProduct = Boolean(record.newProduct);
                 const unitLabel = isNewProduct ? record.newProduct?.unit : selectedProduct?.unit;
-                const canEditCost = !isNewProduct && Boolean(selectedProduct) && Number(selectedProduct?.costPrice ?? 0) === 0;
+                // 直接入库：不计工资，工价显示为 0。
+                const isDirectInbound = isAdmin && selectedSubmitterId === '__direct__';
+                // 工价只读自动带出；仅管理员可在产品工价为 0 时补填，员工/直接入库永不可改。
+                const canEditCost = isAdmin && !isDirectInbound && !isNewProduct && Boolean(selectedProduct) && Number(selectedProduct?.costPrice ?? 0) === 0;
 
                 return (
                   <div key={index} className="grid grid-cols-1 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100 relative group sm:grid-cols-[minmax(0,1fr)_6rem_7rem] sm:items-start">
@@ -1269,8 +1336,8 @@ const Inventory: React.FC = () => {
                           products={products}
                           value={record.productId}
                           onSelect={(productId) => handleUpdateRecord(index, 'productId', productId)}
-                          allowCreate
-                          onCreateNew={(name) => openQuickCreate(index, name)}
+                          allowCreate={isAdmin}
+                          onCreateNew={isAdmin ? (name) => openQuickCreate(index, name) : undefined}
                           placeholder="输入产品名称或规格"
                           className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                         />
@@ -1291,7 +1358,11 @@ const Inventory: React.FC = () => {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">入库单价</label>
-                      {isNewProduct ? (
+                      {isDirectInbound ? (
+                        <div className="block w-full px-3 py-2 border border-violet-200 rounded-md bg-violet-50 text-right text-sm font-medium text-violet-700 shadow-sm">
+                          不计工资
+                        </div>
+                      ) : isNewProduct ? (
                         <div className="block w-full px-3 py-2 border border-gray-200 rounded-md bg-white text-right text-sm text-gray-900 shadow-sm">
                           ¥{formatUnitPrice(record.newProduct?.costPrice ?? 0)}
                         </div>
@@ -1306,8 +1377,14 @@ const Inventory: React.FC = () => {
                           className="block w-full px-3 py-2 border border-gray-300 rounded-md text-right shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                         />
                       ) : (
-                        <div className="block w-full px-3 py-2 border border-gray-200 rounded-md bg-white text-right text-sm text-gray-900 shadow-sm">
-                          {selectedProduct ? `¥${formatUnitPrice(selectedProduct.costPrice)}` : '-'}
+                        <div className="block w-full px-3 py-2 border border-gray-200 rounded-md bg-white text-right text-sm shadow-sm">
+                          {!selectedProduct ? (
+                            <span className="text-gray-400">-</span>
+                          ) : Number(selectedProduct.costPrice ?? 0) > 0 ? (
+                            <span className="text-gray-900">¥{formatUnitPrice(selectedProduct.costPrice)}</span>
+                          ) : (
+                            <span className="text-amber-600">待管理员核定</span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1332,6 +1409,21 @@ const Inventory: React.FC = () => {
                 添加更多产品
               </button>
             </div>
+            {!isAdmin && (
+              <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 px-4 py-2.5 text-sm">
+                <span className="text-amber-700">本次预估工价：</span>
+                <span className="font-semibold text-amber-800">
+                  ¥{formatAmount(
+                    newRecords.reduce((sum, r) => {
+                      const product = r.newProduct ? null : getProductById(r.productId);
+                      const price = product ? Number(product.costPrice || 0) : 0;
+                      return sum + (Number(r.quantity) || 0) * price;
+                    }, 0),
+                  )}
+                </span>
+                <span className="ml-2 text-xs text-amber-600">按「产品工价 × 数量」估算，审核通过后计入工资</span>
+              </div>
+            )}
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => setShowAddModal(false)}
@@ -1450,12 +1542,24 @@ const Inventory: React.FC = () => {
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 />
               </div>
+              {reviewData.status === InventoryRecordStatus.REJECTED && (
+                <div>
+                  <label className="block text-sm font-medium text-red-700">驳回原因 <span className="text-red-500">*</span></label>
+                  <textarea
+                    value={reviewData.rejectionReason}
+                    onChange={(e) => setReviewData({ ...reviewData, rejectionReason: e.target.value })}
+                    rows={2}
+                    placeholder="请说明驳回原因，员工将看到此内容"
+                    className="mt-1 block w-full px-3 py-2 border border-red-300 rounded-md shadow-sm focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm"
+                  ></textarea>
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700">备注</label>
                 <textarea
                   value={reviewData.remark}
                   onChange={(e) => setReviewData({ ...reviewData, remark: e.target.value })}
-                  rows={3}
+                  rows={2}
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 ></textarea>
               </div>

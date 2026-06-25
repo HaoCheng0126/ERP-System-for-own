@@ -2,6 +2,7 @@ import { Entity, Index, PrimaryGeneratedColumn, Column, CreateDateColumn, Update
 import { Customer } from './Customer';
 import { DeliveryOrder } from './DeliveryOrder';
 import { ReturnOrderItem } from './ReturnOrderItem';
+import { SalaryDeduction } from './SalaryDeduction';
 import { ColumnNumericTransformer } from '../utils/transformers';
 
 // 客户退货单（红冲送货）。totalAmount 为正数（本次贷记金额），在对账里按「负的业务」冲减应收。
@@ -39,6 +40,9 @@ export class ReturnOrder {
 
   @OneToMany(() => ReturnOrderItem, (item) => item.returnOrder, { cascade: true })
   items: ReturnOrderItem[];
+
+  @OneToMany(() => SalaryDeduction, (d) => d.returnOrder)
+  deductions?: SalaryDeduction[];
 
   @CreateDateColumn()
   createdAt: Date;

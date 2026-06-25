@@ -22,6 +22,7 @@ import setupRoutes from './routes/setupRoutes';
 import dataQualityRoutes from './routes/dataQualityRoutes';
 import returnRoutes from './routes/returnRoutes';
 import settingsRoutes from './routes/settingsRoutes';
+import salaryDeductionRoutes from './routes/salaryDeductionRoutes';
 import { errorHandler } from './middlewares/errorHandler';
 import { rateLimit } from './middlewares/rateLimit';
 
@@ -81,6 +82,7 @@ app.use('/api/setup', setupRoutes);
 app.use('/api/data-quality', dataQualityRoutes);
 app.use('/api/returns', returnRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/salary-deductions', salaryDeductionRoutes);
 app.use(errorHandler);
 
 async function seedInitialData() {

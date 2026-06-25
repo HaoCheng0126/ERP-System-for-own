@@ -12,7 +12,7 @@ import ProductAutocomplete from '../components/ProductAutocomplete';
 import QueryStateBanner from '../components/QueryStateBanner';
 import { Company, CustomerType, DeliveryOrder, DeliveryOrderStatus, Product, User, UserRole } from '../types';
 import { groupDeliveryOrders } from '../utils/deliveryGrouping';
-import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatEditableDecimal, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatEditableDecimal, formatUnitPrice, unitLabel } from '../utils/format';
 import { DateRangeShortcut, getDateRangeByShortcut, matchesKeyword } from '../utils/filtering';
 import useDebouncedValue from '../hooks/useDebouncedValue';
 import { useCounterparties } from '../hooks/useCounterparties';
@@ -972,9 +972,17 @@ const Delivery: React.FC = () => {
                                 formatAmount={formatAmount}
                               />
                               {dateGroup.orders.map((orderGroup) => {
-                                const statusBadge =
-                                  DELIVERY_STATUS_BADGES[orderGroup.order.status] ??
-                                  DELIVERY_STATUS_BADGES[DeliveryOrderStatus.PENDING];
+                                const returnedAmt = Number(orderGroup.order.returnedAmount ?? 0);
+                                const originalAmt = Number(orderGroup.order.totalAmount);
+                                const isFullyReturned = returnedAmt > 0 && returnedAmt >= originalAmt;
+                                const isPartiallyReturned = returnedAmt > 0 && returnedAmt < originalAmt;
+
+                                const statusBadge = isFullyReturned
+                                  ? { label: '已退货', className: 'bg-rose-50 text-rose-600' }
+                                  : isPartiallyReturned
+                                    ? { label: '部分退货', className: 'bg-orange-50 text-orange-600' }
+                                    : DELIVERY_STATUS_BADGES[orderGroup.order.status] ??
+                                      DELIVERY_STATUS_BADGES[DeliveryOrderStatus.PENDING];
 
                                 return (
                                   <article
@@ -1000,24 +1008,40 @@ const Delivery: React.FC = () => {
                                       <div className="flex items-center justify-between gap-3 sm:justify-end">
                                         <div className="text-right">
                                           <div className="text-xs text-ink-tertiary">本单金额</div>
-                                          <div className="text-base font-semibold tabular-nums text-ink">
-                                            ¥{formatAmountDetail(orderGroup.totalAmount)}
-                                          </div>
+                                          {isFullyReturned ? (
+                                            <>
+                                              <div className="text-base font-semibold tabular-nums text-rose-500">¥0</div>
+                                              <div className="text-xs text-ink-tertiary line-through">原¥{formatAmountDetail(originalAmt)}</div>
+                                            </>
+                                          ) : isPartiallyReturned ? (
+                                            <>
+                                              <div className="text-base font-semibold tabular-nums text-ink">
+                                                ¥{formatAmountDetail(originalAmt - returnedAmt)}
+                                              </div>
+                                              <div className="text-xs text-rose-400">已退¥{formatAmountDetail(returnedAmt)}</div>
+                                            </>
+                                          ) : (
+                                            <div className="text-base font-semibold tabular-nums text-ink">
+                                              ¥{formatAmountDetail(orderGroup.totalAmount)}
+                                            </div>
+                                          )}
                                         </div>
                                         <div className="flex shrink-0 items-center gap-2">
                                           <button
                                             type="button"
+                                            disabled={isFullyReturned || isPartiallyReturned}
                                             onClick={() => handleEditOrder(orderGroup.order)}
-                                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-emerald-600 transition-colors hover:bg-emerald-50"
-                                            title="编辑"
+                                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-emerald-600 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-30"
+                                            title={isFullyReturned || isPartiallyReturned ? '已退货订单不可编辑' : '编辑'}
                                           >
                                             <Edit className="h-4 w-4" />
                                           </button>
                                           <button
                                             type="button"
+                                            disabled={isFullyReturned || isPartiallyReturned}
                                             onClick={() => handleDeleteOrder(orderGroup.order)}
-                                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-rose-500 transition-colors hover:bg-rose-50"
-                                            title="删除"
+                                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-rose-500 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-30"
+                                            title={isFullyReturned || isPartiallyReturned ? '已退货订单不可删除' : '删除'}
                                           >
                                             <Trash2 className="h-4 w-4" />
                                           </button>
@@ -1030,10 +1054,8 @@ const Delivery: React.FC = () => {
                                         <table className="min-w-full">
                                           <thead>
                                             <tr className="border-b border-line bg-canvas text-ink-tertiary">
-                                              <th className="px-4 py-2.5 text-left text-xs font-medium">产品名称</th>
-                                              <th className="px-4 py-2.5 text-left text-xs font-medium">规格</th>
-                                              <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
-                                              <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                                              <th className="px-4 py-2.5 text-left text-xs font-medium">产品/规格</th>
+                                              <th className="px-4 py-2.5 text-right text-xs font-medium">数量{unitLabel(orderGroup.items.map(i => i.product?.unit))}</th>
                                               <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
                                               <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
                                             </tr>
@@ -1044,14 +1066,10 @@ const Delivery: React.FC = () => {
                                                 key={item.id || `${orderGroup.order.id}-${index}`}
                                                 className="transition-colors hover:bg-brand-50/40"
                                               >
-                                                <td className="px-4 py-2.5 text-sm text-ink">{item.product?.name || '-'}</td>
-                                                <td className="px-4 py-2.5 text-sm text-ink-secondary">
-                                                  {item.product?.specification || '-'}
+                                                <td className="px-4 py-2.5 text-sm text-ink">
+                                                  {[item.product?.name, item.product?.specification].filter(Boolean).join(' ') || '-'}
                                                 </td>
                                                 <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">{item.quantity}</td>
-                                                <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">
-                                                  {item.product?.unit || '-'}
-                                                </td>
                                                 <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                                   {formatUnitPrice(item.unitPrice)}
                                                 </td>
@@ -1145,8 +1163,7 @@ const Delivery: React.FC = () => {
                       <colgroup>
                         <col style={{ width: '7%' }} />
                         <col style={{ width: '37%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '20%' }} />
                         <col style={{ width: '12%' }} />
                         <col style={{ width: '13%' }} />
                         <col style={{ width: '11%' }} />
@@ -1155,8 +1172,7 @@ const Delivery: React.FC = () => {
                         <tr className="bg-gray-100 text-center font-semibold">
                           <th>序号</th>
                           <th>名称及规格</th>
-                          <th>单位</th>
-                          <th>数量</th>
+                          <th>数量{unitLabel(orderGroup.items.map(i => i.product?.unit))}</th>
                           <th>单价</th>
                           <th>金额</th>
                           <th>备注</th>
@@ -1170,7 +1186,6 @@ const Delivery: React.FC = () => {
                               {item.product?.name || '-'}
                               {item.product?.specification ? `　${item.product.specification}` : ''}
                             </td>
-                            <td className="text-center">{item.product?.unit || ''}</td>
                             <td className="text-right">{item.quantity}</td>
                             <td className="text-right">{formatUnitPrice(item.unitPrice)}</td>
                             <td className="text-right">{formatAmountDetail(item.amount)}</td>

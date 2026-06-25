@@ -13,6 +13,9 @@ import { AppError } from '../utils/AppError';
 import { roundLineAmount, roundQuantity, roundUnitPrice } from '../utils/decimal';
 import { createProductWithManager } from '../controllers/productController';
 
+// 「直接入库（不计工资）」哨兵：管理员提交入库单时把提交人设为该值，表示不指派员工、只入库存。
+export const DIRECT_INBOUND_SUBMITTER = '__direct__';
+
 type InventoryRecordItemInput = {
   productId?: string;
   quantity: number;
@@ -142,6 +145,18 @@ export class InventoryService {
     const createdAt = new Date();
 
     if (role === UserRole.ADMIN) {
+      // 直接入库：提交人传哨兵值，不指派任何员工、不计工资，工价记 0。
+      if (data.submittedBy === DIRECT_INBOUND_SUBMITTER) {
+        return {
+          actorId,
+          submittedBy: actorId,
+          submissionMode: InventoryRecordSubmissionMode.ADMIN_DIRECT,
+          status: InventoryRecordStatus.APPROVED,
+          reviewedBy: actorId,
+          reviewedAt: createdAt,
+          createdAt,
+        };
+      }
       const submissionMode = data.submissionMode || InventoryRecordSubmissionMode.ADMIN_ASSIGN;
       if (submissionMode !== InventoryRecordSubmissionMode.ADMIN_ASSIGN) {
         throw new AppError('管理员创建入库单仅支持管理员分配模式', 400);
@@ -186,7 +201,7 @@ export class InventoryService {
       const results = [];
 
       for (const [index, item] of data.records.entries()) {
-        const resolved = await this.resolveRecordItem(item, manager);
+        const resolved = await this.resolveRecordItem(item, manager, role);
         const recordNumber = this.formatRecordNumber(context.createdAt, userCodeDigits, count + index + 1);
         const result = await this.createSingleRecord(context, resolved, manager, recordNumber);
         results.push(result);
@@ -200,8 +215,13 @@ export class InventoryService {
   private async resolveRecordItem(
     item: InventoryRecordItemInput,
     manager: EntityManager,
+    role: UserRole,
   ): Promise<{ productId: string; quantity: number }> {
     if (item.newProduct) {
+      // 新建产品（含定价）仅管理员可做；员工只能为已有产品提交产量。
+      if (role !== UserRole.ADMIN) {
+        throw new AppError('员工不能新建产品，请选择已有产品或联系管理员添加', 400);
+      }
       const product = await createProductWithManager(manager, {
         name: item.newProduct.name,
         specification: item.newProduct.specification,
@@ -217,7 +237,8 @@ export class InventoryService {
       throw new AppError('产品ID和数量为必填项', 400);
     }
 
-    if (item.costPriceOverride !== undefined) {
+    // 工价（costPrice）只由管理员设定；员工提交永不改产品工价，避免员工自定工资。
+    if (role === UserRole.ADMIN && item.costPriceOverride !== undefined) {
       const product = await this.getProductOrThrow(item.productId, manager);
       const currentCost = Number(product.costPrice) || 0;
       const override = roundUnitPrice(item.costPriceOverride);
@@ -278,6 +299,40 @@ export class InventoryService {
       }
     }
 
+    return results;
+  }
+
+  // 直接入库（不计工资）：在调用方事务内按管理员身份生成「已通过、工价 0」的入库记录并加库存，
+  // 供送货单「现场分配入库 → 直接入库」复用，使其在入库单管理里可查可删。
+  async createDirectInboundRecords(
+    manager: EntityManager,
+    actorId: string,
+    allocations: { productId: string; quantity: number }[],
+  ): Promise<InventoryRecord[]> {
+    const createdAt = new Date();
+    const digits = await this.getUserCodeDigits(actorId, manager);
+    let count = await this.getDailyRecordCount(actorId, manager, createdAt);
+    const results: InventoryRecord[] = [];
+    for (const allocation of allocations) {
+      count += 1;
+      const recordNumber = this.formatRecordNumber(createdAt, digits, count);
+      const context: CreateInventoryContext = {
+        actorId,
+        submittedBy: actorId,
+        submissionMode: InventoryRecordSubmissionMode.ADMIN_DIRECT,
+        status: InventoryRecordStatus.APPROVED,
+        reviewedBy: actorId,
+        reviewedAt: createdAt,
+        createdAt,
+      };
+      const record = await this.createSingleRecord(
+        context,
+        { productId: allocation.productId, quantity: allocation.quantity },
+        manager,
+        recordNumber,
+      );
+      if (record) results.push(record);
+    }
     return results;
   }
 
@@ -356,7 +411,11 @@ export class InventoryService {
     }
 
     const product = await this.getProductOrThrow(productId, manager);
-    const unitPrice = roundUnitPrice(product.costPrice);
+    // 直接入库不计工资：工价记 0；其余按产品工价。
+    const unitPrice =
+      context.submissionMode === InventoryRecordSubmissionMode.ADMIN_DIRECT
+        ? 0
+        : roundUnitPrice(product.costPrice);
     const totalAmount = roundLineAmount(normalizedQuantity, unitPrice);
 
     const finalRecordNumber = recordNumber || await this.generateInventoryRecordNumber(context.submittedBy, manager);
@@ -419,7 +478,7 @@ export class InventoryService {
     return record;
   }
 
-  async reviewInventoryRecord(id: string, reviewerId: string, data: { status: InventoryRecordStatus; quantity?: number; remark?: string }) {
+  async reviewInventoryRecord(id: string, reviewerId: string, data: { status: InventoryRecordStatus; quantity?: number; remark?: string; rejectionReason?: string }) {
     return AppDataSource.transaction(async (manager) => {
       const record = await manager.findOne(InventoryRecord, { where: { id } });
 
@@ -436,6 +495,11 @@ export class InventoryService {
       record.reviewedAt = new Date();
       if (data.remark !== undefined) {
         record.remark = this.normalizeRemark(data.remark) ?? null;
+      }
+      if (data.status === InventoryRecordStatus.REJECTED) {
+        record.rejectionReason = this.normalizeRemark(data.rejectionReason) ?? null;
+      } else {
+        record.rejectionReason = null;
       }
 
       if (data.quantity !== undefined) {
@@ -461,7 +525,7 @@ export class InventoryService {
   async reviewInventoryRecordsBatch(
     ids: string[],
     reviewerId: string,
-    data: { status: InventoryRecordStatus; remark?: string },
+    data: { status: InventoryRecordStatus; remark?: string; rejectionReason?: string },
   ) {
     const uniqueIds = Array.from(new Set(ids));
     if (uniqueIds.length === 0) {
@@ -487,11 +551,15 @@ export class InventoryService {
 
       const reviewedAt = new Date();
       const remark = this.normalizeRemark(data.remark) ?? null;
+      const rejectionReason = data.status === InventoryRecordStatus.REJECTED
+        ? (this.normalizeRemark(data.rejectionReason) ?? null)
+        : null;
       for (const record of records) {
         record.status = data.status;
         record.reviewedBy = reviewerId;
         record.reviewedAt = reviewedAt;
         record.remark = remark;
+        record.rejectionReason = rejectionReason;
         await manager.save(record);
 
         if (data.status === InventoryRecordStatus.APPROVED) {
@@ -518,15 +586,17 @@ export class InventoryService {
         throw new AppError('退货扣款记录只能通过删除对应退货单撤销', 400);
       }
 
+
       if (role !== UserRole.ADMIN) {
+        // 员工只能重新提交自己的待审或已驳回的员工提交记录。
         if (record.submittedBy !== userId) {
           throw new AppError('无权修改此入库单', 403);
         }
-        if (record.status !== InventoryRecordStatus.REJECTED) {
-          throw new AppError('只能修改被驳回的入库单', 400);
+        if (record.submissionMode !== InventoryRecordSubmissionMode.EMPLOYEE_SUBMIT) {
+          throw new AppError('管理员分配的入库单不能由员工修改', 403);
         }
-        if (data.submittedBy && data.submittedBy !== userId) {
-          throw new AppError('无权修改提交人', 403);
+        if (record.status === InventoryRecordStatus.APPROVED) {
+          throw new AppError('已通过的入库单不能修改，请联系管理员', 403);
         }
       } else {
         if (record.status !== InventoryRecordStatus.APPROVED) {
@@ -546,7 +616,8 @@ export class InventoryService {
         ? (await this.getSubmitterOrThrow(data.submittedBy, manager)).id
         : record.submittedBy;
       const nextRemark = this.normalizeRemark(data.remark);
-      const inventoryChanged = nextProductId !== record.productId || nextQuantity !== record.quantity;
+      const productChanged = nextProductId !== record.productId;
+      const inventoryChanged = productChanged || nextQuantity !== record.quantity;
 
       if (role === UserRole.ADMIN && inventoryChanged) {
         await this.adjustProductStock(
@@ -559,7 +630,12 @@ export class InventoryService {
 
       record.productId = nextProductId;
       record.quantity = nextQuantity;
-      record.unitPrice = roundUnitPrice(nextProduct.costPrice);
+      // 仅在更换产品时按新产品工价重定价；否则保留原单价。
+      // 这样改提交人/备注等无关字段不会因产品工价后续变动而静默改写历史工资，
+      // 「直接入库（不计工资）」记录的单价也能恒为 0。
+      if (productChanged) {
+        record.unitPrice = roundUnitPrice(nextProduct.costPrice);
+      }
       record.totalAmount = roundLineAmount(nextQuantity, record.unitPrice);
 
       if (role === UserRole.ADMIN) {
@@ -575,6 +651,7 @@ export class InventoryService {
         record.reviewedBy = null;
         record.reviewedAt = null;
         record.remark = null;
+        record.rejectionReason = null;
       }
 
       await manager.save(record);
@@ -602,14 +679,25 @@ export class InventoryService {
       }
 
       if (role !== UserRole.ADMIN) {
-        throw new AppError('无权删除此入库单', 403);
+        // 员工只能删除自己提交的待审或已驳回的记录。
+        if (record.submittedBy !== userId) {
+          throw new AppError('无权删除此入库单', 403);
+        }
+        if (record.submissionMode === InventoryRecordSubmissionMode.ADMIN_ASSIGN) {
+          throw new AppError('管理员分配的入库单不能由员工删除', 403);
+        }
+        if (record.status === InventoryRecordStatus.APPROVED) {
+          throw new AppError('已通过的入库单不能删除，请联系管理员', 403);
+        }
+        // PENDING 或 REJECTED → 允许删除，不需要回退库存（未通过的记录不曾更新库存）
+        await manager.delete(InventoryRecord, { id });
+        return true;
       }
 
-      if (record.status !== InventoryRecordStatus.APPROVED) {
-        throw new AppError('只能删除已通过的入库单', 400);
+      // 管理员：已通过的需先回退库存；待审/驳回直接删除。
+      if (record.status === InventoryRecordStatus.APPROVED) {
+        await this.adjustProductStock(manager, record.productId, -Number(record.quantity), '当前库存不足，无法删除该入库单');
       }
-
-      await this.adjustProductStock(manager, record.productId, -Number(record.quantity), '当前库存不足，无法删除该入库单');
 
       await manager.delete(InventoryRecord, { id });
       return true;

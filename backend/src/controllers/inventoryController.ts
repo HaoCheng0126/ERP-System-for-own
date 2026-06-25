@@ -49,7 +49,12 @@ export const createInventoryRecord = async (req: AuthRequest, res: Response) => 
 export const reviewInventoryRecord = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user) return res.status(401).json({ message: '未认证' });
-    const record = await inventoryService.reviewInventoryRecord(req.params.id, req.user.id, req.body);
+    const record = await inventoryService.reviewInventoryRecord(req.params.id, req.user.id, {
+      status: req.body.status,
+      quantity: req.body.quantity,
+      remark: req.body.remark,
+      rejectionReason: req.body.rejectionReason,
+    });
     res.json({ message: '审核完成', record });
   } catch (error: any) {
     if (error instanceof AppError) return res.status(error.statusCode).json({ message: error.message });
@@ -64,6 +69,7 @@ export const reviewInventoryRecordsBatch = async (req: AuthRequest, res: Respons
     const records = await inventoryService.reviewInventoryRecordsBatch(ids, req.user.id, {
       status: req.body?.status,
       remark: req.body?.remark,
+      rejectionReason: req.body?.rejectionReason,
     });
     res.json({ message: `已批量处理 ${records.length} 条入库单`, records });
   } catch (error: any) {

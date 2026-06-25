@@ -9,6 +9,7 @@ import {
   Customer,
   CustomerType,
   ProductPrice,
+  ReturnOrder,
 } from '../entities';
 import { AppError } from '../utils/AppError';
 import { AuthRequest } from '../middlewares/auth';
@@ -107,7 +108,8 @@ const applyInboundAllocations = async (
     throw new AppError(`分配入库数量不足以覆盖缺口（缺 ${shortfall}，已分配 ${allocated}）`, 400);
   }
   if (directQty > 0) {
-    await adjustProductStock(manager, productId, directQty);
+    // 直接入库：生成一条「直接入库（不计工资）」入库单记录（顺带加库存），可在入库单管理里查/删纠错。
+    await inventoryService.createDirectInboundRecords(manager, actorId, [{ productId, quantity: directQty }]);
   }
   if (employeeAllocations.length > 0) {
     await inventoryService.createApprovedRecordsWithManager(manager, actorId, employeeAllocations);
@@ -134,13 +136,27 @@ const upsertCustomerPrice = async (
   }
 };
 
+// 批量查退货合计，注入 returnedAmount 字段，避免 N+1
+const attachReturnedAmounts = async (orders: DeliveryOrder[]) => {
+  if (orders.length === 0) return orders;
+  const rows = await AppDataSource.getRepository(ReturnOrder)
+    .createQueryBuilder('r')
+    .select('r.deliveryOrderId', 'deliveryOrderId')
+    .addSelect('SUM(r.totalAmount)', 'total')
+    .where('r.deliveryOrderId IS NOT NULL')
+    .groupBy('r.deliveryOrderId')
+    .getRawMany<{ deliveryOrderId: string; total: string }>();
+  const map = new Map(rows.map((r) => [r.deliveryOrderId, Number(r.total)]));
+  return orders.map((o) => ({ ...o, returnedAmount: map.get(o.id) ?? 0 }));
+};
+
 export const getDeliveryOrders = async (req: AuthRequest, res: Response) => {
   try {
     const orders = await deliveryOrderRepository.find({
       relations: ['customer', 'items', 'items.product'],
       order: { createdAt: 'DESC' },
     });
-    res.json(orders);
+    res.json(await attachReturnedAmounts(orders));
   } catch (error) {
     res.status(500).json({ message: '服务器错误' });
   }
@@ -158,7 +174,8 @@ export const getDeliveryOrderById = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: '送货单不存在' });
     }
 
-    res.json(order);
+    const [withAmount] = await attachReturnedAmounts([order]);
+    res.json(withAmount);
   } catch (error) {
     res.status(500).json({ message: '服务器错误' });
   }
@@ -388,6 +405,13 @@ export const updateDeliveryOrder = async (req: AuthRequest, res: Response) => {
         throw new AppError('送货单不存在', 404);
       }
 
+      // 已有关联退货单的送货单禁止编辑：退货按 customerId 冲减应收，若此处改小/改动送货金额，
+      // 退货单会变成悬空引用且仍在冲减，导致应收为负、对账错乱。须先删退货单。
+      const linkedReturnCount = await manager.count(ReturnOrder, { where: { deliveryOrderId: id } });
+      if (linkedReturnCount > 0) {
+        throw new AppError('该送货单已有关联退货单，请先删除对应退货单后再编辑', 400);
+      }
+
       const currentCustomerId = customerId || existingOrderInTransaction.customerId;
 
       if (customerId) {
@@ -522,6 +546,12 @@ export const deleteDeliveryOrder = async (req: AuthRequest, res: Response) => {
     }
 
     await AppDataSource.transaction(async (manager) => {
+      // 已有关联退货单时禁止删除：退货单的外键为 SET NULL，删送货单会把退货单变成悬空记录，
+      // 但退货仍按 customerId 冲减应收，导致应收为负、库存出现幽灵差额。须先删退货单。
+      const linkedReturnCount = await manager.count(ReturnOrder, { where: { deliveryOrderId: id } });
+      if (linkedReturnCount > 0) {
+        throw new AppError('该送货单已有关联退货单，请先删除对应退货单后再删除', 400);
+      }
       if (order.stockDeducted) {
         for (const item of order.items || []) {
           await adjustProductStock(manager, item.productId, Number(item.quantity));

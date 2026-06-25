@@ -13,10 +13,10 @@ import DateSectionHeader from '../components/records/DateSectionHeader';
 import EntityCardHeader from '../components/records/EntityCardHeader';
 import RecordsSummaryBar from '../components/records/RecordsSummaryBar';
 import api from '../utils/api';
-import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatUnitPrice, unitLabel } from '../utils/format';
 import { DateRangeShortcut, getDateRangeByShortcut, matchesKeyword } from '../utils/filtering';
 import useDebouncedValue from '../hooks/useDebouncedValue';
-import { Company, InventoryRecord, InventoryRecordSubmissionMode, SalaryReport, User, UserRole } from '../types';
+import { Company, InventoryRecord, SalaryDeductionTypeLabel, SalaryReport, User, UserRole } from '../types';
 import { getUserRole } from '../utils/auth';
 import { exportPrintable, getShareFallbackMessage, toSafePdfFileName } from '../utils/printShare';
 
@@ -45,7 +45,9 @@ type PrintableSalarySlip = {
   title: string;
   periodLabel: string;
   generatedAt: string;
-  totalAmount: number;
+  grossAmount: number;
+  totalDeductions: number;
+  netSalary: number;
   totalQuantity: number;
   totalRecords: number;
   rows: SalarySlipDetailRow[];
@@ -127,9 +129,6 @@ const getGeneratedAtLabel = () =>
 
 const getSortedRecords = (records: InventoryRecord[]) =>
   [...records].sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-
-const isReturnDeduction = (record: InventoryRecord) =>
-  record.submissionMode === InventoryRecordSubmissionMode.RETURN_DEDUCTION;
 
 // 把某员工的入库记录按日期分组（倒序），用于时间线展示。
 const groupRecordsByDate = (records: InventoryRecord[]): SalaryDateGroup[] => {
@@ -222,7 +221,9 @@ const Salary: React.FC = () => {
       title: getSalarySlipTitle(dateRange.startDate, dateRange.endDate),
       periodLabel: getPeriodLabel(dateRange.startDate, dateRange.endDate),
       generatedAt: getGeneratedAtLabel(),
-      totalAmount: Number(target.totalAmount || 0),
+      grossAmount: Number(target.grossAmount || 0),
+      totalDeductions: Number(target.totalDeductions || 0),
+      netSalary: Number(target.netSalary || 0),
       totalQuantity: Number(target.totalQuantity || 0),
       totalRecords: target.records.length,
       rows: getSortedRecords(target.records).map((record) => ({
@@ -284,7 +285,9 @@ const Salary: React.FC = () => {
   const visibleSalarySummary = useMemo(
     () => ({
       totalRecords: visibleSalaryRows.reduce((sum, item) => sum + (item.records?.length || 0), 0),
-      totalAmount: visibleSalaryRows.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0),
+      totalGrossAmount: visibleSalaryRows.reduce((sum, item) => sum + Number(item.grossAmount || 0), 0),
+      totalDeductions: visibleSalaryRows.reduce((sum, item) => sum + Number(item.totalDeductions || 0), 0),
+      totalNetSalary: visibleSalaryRows.reduce((sum, item) => sum + Number(item.netSalary || 0), 0),
       totalQuantity: visibleSalaryRows.reduce((sum, item) => sum + Number(item.totalQuantity || 0), 0),
     }),
     [visibleSalaryRows],
@@ -293,10 +296,21 @@ const Salary: React.FC = () => {
   const salarySummaryStats = useMemo(
     () => [
       { label: '员工数', value: String(visibleSalaryRows.length) },
-      { label: '入库总数量', value: formatDisplayDecimal(visibleSalarySummary.totalQuantity, 4) },
-      { label: '工资总额', value: `¥${formatAmount(visibleSalarySummary.totalAmount)}` },
+      { label: '入库总额', value: `¥${formatAmount(visibleSalarySummary.totalGrossAmount)}` },
+      {
+        label: '扣款总额',
+        value: visibleSalarySummary.totalDeductions > 0
+          ? `−¥${formatAmount(visibleSalarySummary.totalDeductions)}`
+          : '¥0.00',
+      },
+      { label: '总工资', value: `¥${formatAmount(visibleSalarySummary.totalNetSalary)}` },
     ],
-    [visibleSalaryRows.length, visibleSalarySummary.totalAmount, visibleSalarySummary.totalQuantity],
+    [
+      visibleSalaryRows.length,
+      visibleSalarySummary.totalGrossAmount,
+      visibleSalarySummary.totalDeductions,
+      visibleSalarySummary.totalNetSalary,
+    ],
   );
 
   const clearFilters = () => {
@@ -325,13 +339,15 @@ const Salary: React.FC = () => {
     if (!salaryReport) return;
 
     const rows = [
-      ['员工编号', '姓名', '账号', '总数量', '总金额'],
+      ['员工编号', '姓名', '账号', '总数量', '入库总额', '扣款总额', '总工资'],
       ...visibleSalaryRows.map((item) => [
         item.user.code || '',
         item.user.name,
         item.user.username,
         formatAmount(item.totalQuantity),
-        formatAmount(item.totalAmount),
+        formatAmount(item.grossAmount),
+        formatAmount(item.totalDeductions),
+        formatAmount(item.netSalary),
       ]),
     ];
     const csvContent = `\uFEFF${rows.map((row) => row.map(escapeCsvValue).join(',')).join('\n')}`;
@@ -483,7 +499,8 @@ const Salary: React.FC = () => {
                   const employeeId = item.user.id;
                   const isExpanded = expandedEmployeeIds.has(employeeId);
                   const dateGroups = groupRecordsByDate(item.records || []);
-                  const isNegative = Number(item.totalAmount || 0) < 0;
+                  const itemDeductions = item.deductions || [];
+                  const isNegative = Number(item.netSalary || 0) < 0;
 
                   return (
                     <section
@@ -494,8 +511,14 @@ const Salary: React.FC = () => {
                         name={item.user.name}
                         initial={item.user.name.slice(0, 1) || '员'}
                         stats={[
-                          { label: '工资总额', value: `¥${formatAmount(item.totalAmount)}` },
-                          { label: '入库数量', value: formatDisplayDecimal(item.totalQuantity, 4) },
+                          { label: '入库总额', value: `¥${formatAmount(item.grossAmount)}` },
+                          {
+                            label: '扣款总额',
+                            value: Number(item.totalDeductions) > 0
+                              ? `−¥${formatAmount(item.totalDeductions)}`
+                              : '¥0.00',
+                          },
+                          { label: '总工资', value: `¥${formatAmount(item.netSalary)}` },
                         ]}
                         note={isNegative ? '本期退货扣款超过新增产值，工资为负，请核对。' : undefined}
                         expanded={isExpanded}
@@ -523,66 +546,42 @@ const Salary: React.FC = () => {
                                     <table className="min-w-full">
                                       <thead>
                                         <tr className="border-b border-line bg-canvas text-ink-tertiary">
-                                          <th className="px-4 py-2.5 text-left text-xs font-medium">入库单号</th>
-                                          <th className="px-4 py-2.5 text-left text-xs font-medium">产品</th>
+                                          <th className="px-4 py-2.5 text-left text-xs font-medium">产品/规格</th>
                                           <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
                                           <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
                                           <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-line-soft">
-                                        {dateGroup.records.map((record) => {
-                                          const isReturn = isReturnDeduction(record);
-                                          return (
+                                        {dateGroup.records.map((record) => (
                                             <tr key={record.id} className="transition-colors hover:bg-brand-50/40">
-                                              <td className="px-4 py-2.5 text-sm text-ink-secondary">{record.recordNumber || '-'}</td>
                                               <td className="px-4 py-2.5 text-sm text-ink">
-                                                <div className="flex items-center gap-2">
-                                                  <span>
-                                                    {record.product?.name || '-'}
-                                                    {record.product?.specification ? ` (${record.product.specification})` : ''}
-                                                  </span>
-                                                  {isReturn && (
-                                                    <span className="inline-flex shrink-0 items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-600">
-                                                      退货扣款
-                                                    </span>
-                                                  )}
-                                                </div>
+                                                {[record.product?.name, record.product?.specification].filter(Boolean).join(' ') || '-'}
                                               </td>
-                                              <td className={`px-4 py-2.5 text-right text-sm tabular-nums ${isReturn ? 'text-rose-600' : 'text-ink'}`}>
+                                              <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                                 {formatDisplayDecimal(record.quantity, 4)}
                                               </td>
                                               <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                                 ¥{formatUnitPrice(record.unitPrice)}
                                               </td>
-                                              <td className={`px-4 py-2.5 text-right text-sm font-medium tabular-nums ${isReturn ? 'text-rose-600' : 'text-ink'}`}>
+                                              <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-ink">
                                                 ¥{formatAmountDetail(record.totalAmount)}
                                               </td>
                                             </tr>
-                                          );
-                                        })}
+                                          ))}
                                       </tbody>
                                     </table>
                                   </div>
                                   <div className="space-y-3 p-3 md:hidden">
-                                    {dateGroup.records.map((record) => {
-                                      const isReturn = isReturnDeduction(record);
-                                      return (
+                                    {dateGroup.records.map((record) => (
                                         <MobileRecordCard key={record.id} className="border-line-soft shadow-none">
                                           <div className="mb-3 flex items-start justify-between gap-3">
                                             <div className="min-w-0">
-                                              <div className="flex items-center gap-2">
-                                                <div className="text-sm font-semibold text-ink">{record.recordNumber || '-'}</div>
-                                                {isReturn && (
-                                                  <span className="inline-flex shrink-0 items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-600">
-                                                    退货扣款
-                                                  </span>
-                                                )}
-                                              </div>
+                                              <div className="text-sm font-semibold text-ink">{record.recordNumber || '-'}</div>
                                             </div>
                                             <div className="shrink-0 text-right">
                                               <div className="text-xs text-ink-tertiary">金额</div>
-                                              <div className={`text-base font-bold tabular-nums ${isReturn ? 'text-rose-600' : 'text-ink'}`}>
+                                              <div className="text-base font-bold tabular-nums text-ink">
                                                 ¥{formatAmountDetail(record.totalAmount)}
                                               </div>
                                             </div>
@@ -596,12 +595,73 @@ const Salary: React.FC = () => {
                                             <MobileField label="数量" value={formatDisplayDecimal(record.quantity, 4)} />
                                           </MobileFieldGrid>
                                         </MobileRecordCard>
-                                      );
-                                    })}
+                                      ))}
                                   </div>
                                 </div>
                               </div>
                             ))
+                          )}
+                          {itemDeductions.length > 0 && (
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between px-1">
+                                <span className="text-sm font-medium text-rose-600">扣款明细</span>
+                                <span className="text-sm font-semibold tabular-nums text-rose-600">
+                                  −¥{formatAmount(item.totalDeductions)}
+                                </span>
+                              </div>
+                              <div className="overflow-hidden rounded-xl border border-rose-200 bg-white">
+                                <div className="hidden overflow-x-auto md:block">
+                                  <table className="min-w-full">
+                                    <thead>
+                                      <tr className="border-b border-rose-100 bg-rose-50 text-rose-400">
+                                        <th className="px-4 py-2.5 text-left text-xs font-medium">扣款日期</th>
+                                        <th className="px-4 py-2.5 text-left text-xs font-medium">类型</th>
+                                        <th className="px-4 py-2.5 text-left text-xs font-medium">原因</th>
+                                        <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-rose-50">
+                                      {itemDeductions.map((ded) => (
+                                        <tr key={ded.id} className="transition-colors hover:bg-rose-50/40">
+                                          <td className="px-4 py-2.5 text-sm text-ink">{ded.deductionDate}</td>
+                                          <td className="px-4 py-2.5 text-sm text-ink">
+                                            <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-600">
+                                              {SalaryDeductionTypeLabel[ded.type] || ded.type}
+                                            </span>
+                                          </td>
+                                          <td className="px-4 py-2.5 text-sm text-ink-secondary">{ded.reason || '—'}</td>
+                                          <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-rose-600">
+                                            −¥{formatAmountDetail(ded.amount)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                <div className="space-y-3 p-3 md:hidden">
+                                  {itemDeductions.map((ded) => (
+                                    <MobileRecordCard key={ded.id} className="border-rose-100 shadow-none">
+                                      <div className="mb-2 flex items-start justify-between gap-3">
+                                        <div className="flex items-center gap-2">
+                                          <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-600">
+                                            {SalaryDeductionTypeLabel[ded.type] || ded.type}
+                                          </span>
+                                          <span className="text-xs text-ink-tertiary">{ded.deductionDate}</span>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                          <div className="text-base font-bold tabular-nums text-rose-600">
+                                            −¥{formatAmountDetail(ded.amount)}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      {ded.reason && (
+                                        <div className="text-sm text-ink-secondary">{ded.reason}</div>
+                                      )}
+                                    </MobileRecordCard>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
                           )}
                         </div>
                       </DisclosureSection>
@@ -659,18 +719,24 @@ const Salary: React.FC = () => {
               </div>
             </header>
 
-            <section className="mt-8 grid grid-cols-3 gap-4">
+            <section className="mt-8 grid grid-cols-4 gap-4">
               <div className="border border-gray-900 px-4 py-4 text-center">
-                <div className="text-sm tracking-[0.08em] text-gray-600">本期工资总额</div>
-                <div className="mt-3 text-[24px] font-semibold">¥{formatAmount(printableSlip.totalAmount)}</div>
+                <div className="text-sm tracking-[0.08em] text-gray-600">入库总额</div>
+                <div className="mt-3 text-[22px] font-semibold">¥{formatAmount(printableSlip.grossAmount)}</div>
               </div>
               <div className="border border-gray-900 px-4 py-4 text-center">
-                <div className="text-sm tracking-[0.08em] text-gray-600">本期入库总数量</div>
-                <div className="mt-3 text-[24px] font-semibold">{printableSlip.totalQuantity}</div>
+                <div className="text-sm tracking-[0.08em] text-gray-600">扣款总额</div>
+                <div className="mt-3 text-[22px] font-semibold">
+                  {printableSlip.totalDeductions > 0 ? `−¥${formatAmount(printableSlip.totalDeductions)}` : '¥0.00'}
+                </div>
+              </div>
+              <div className="border border-gray-900 px-4 py-4 text-center">
+                <div className="text-sm tracking-[0.08em] text-gray-600">总工资</div>
+                <div className="mt-3 text-[22px] font-semibold">¥{formatAmount(printableSlip.netSalary)}</div>
               </div>
               <div className="border border-gray-900 px-4 py-4 text-center">
                 <div className="text-sm tracking-[0.08em] text-gray-600">本期入库单数</div>
-                <div className="mt-3 text-[24px] font-semibold">{printableSlip.totalRecords}</div>
+                <div className="mt-3 text-[22px] font-semibold">{printableSlip.totalRecords}</div>
               </div>
             </section>
 
@@ -680,11 +746,8 @@ const Salary: React.FC = () => {
                 <thead>
                   <tr>
                     <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">日期</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">入库单号</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">产品</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">规格</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">单位</th>
-                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">数量</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">产品/规格</th>
+                    <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">数量{unitLabel(printableSlip.rows.map(r => r.unit))}</th>
                     <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">单价</th>
                     <th className="border border-gray-900 px-3 py-3 text-center text-sm font-semibold">金额</th>
                   </tr>
@@ -694,10 +757,9 @@ const Salary: React.FC = () => {
                     printableSlip.rows.map((row) => (
                       <tr key={row.id}>
                         <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.dateKey}</td>
-                        <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.recordNumber}</td>
-                        <td className="border border-gray-900 px-3 py-3 text-sm">{row.productName}</td>
-                        <td className="border border-gray-900 px-3 py-3 text-sm">{row.specification}</td>
-                        <td className="border border-gray-900 px-3 py-3 text-center text-sm">{row.unit}</td>
+                        <td className="border border-gray-900 px-3 py-3 text-sm">
+                          {[row.productName, row.specification].filter(s => s && s !== '-').join(' ') || '-'}
+                        </td>
                         <td className="border border-gray-900 px-3 py-3 text-right text-sm">{row.quantity}</td>
                         <td className="border border-gray-900 px-3 py-3 text-right text-sm">
                           ¥{formatUnitPrice(row.unitPrice)}
@@ -709,7 +771,7 @@ const Salary: React.FC = () => {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={8} className="border border-gray-900 px-3 py-8 text-center text-sm text-gray-500">
+                      <td colSpan={5} className="border border-gray-900 px-3 py-8 text-center text-sm text-gray-500">
                         本期无记录
                       </td>
                     </tr>

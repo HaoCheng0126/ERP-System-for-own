@@ -12,7 +12,7 @@ import PageHeader from '../components/PageHeader';
 import { Company, Customer, CustomerType, DeliveryOrder, PaymentMethod, PaymentRecord, PurchaseOrder, ReconciliationGroup, ReturnOrder } from '../types';
 import { groupDeliveryOrders } from '../utils/deliveryGrouping';
 import { getPurchaseAmount, groupPurchases } from '../utils/purchaseGrouping';
-import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatUnitPrice } from '../utils/format';
+import { formatAmount, formatAmountDetail, formatDisplayDecimal, formatUnitPrice, unitLabel } from '../utils/format';
 import { DateRangeShortcut, getDateRangeByShortcut } from '../utils/filtering';
 import api from '../utils/api';
 import { exportPrintable, getShareFallbackMessage, toSafePdfFileName } from '../utils/printShare';
@@ -442,8 +442,7 @@ const Statement: React.FC = () => {
                         <thead>
                           <tr className="border-b border-line bg-canvas text-ink-tertiary">
                             <th className="px-4 py-2.5 text-left text-xs font-medium">品名</th>
-                            <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
-                            <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                            <th className="px-4 py-2.5 text-right text-xs font-medium">数量{unitLabel(dateGroup.purchases.map(p => p.unit))}</th>
                             <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
                             <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
                             <th className="px-4 py-2.5 text-left text-xs font-medium">备注</th>
@@ -456,7 +455,6 @@ const Statement: React.FC = () => {
                               <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                 {formatDisplayDecimal(purchase.quantity, 4)}
                               </td>
-                              <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">{purchase.unit || '-'}</td>
                               <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                 {formatUnitPrice(purchase.unitPrice)}
                               </td>
@@ -520,8 +518,13 @@ const Statement: React.FC = () => {
                   amount={dateGroup.totalAmount}
                   formatAmount={formatAmount}
                 />
-                {dateGroup.orders.map((orderGroup) => (
-                  <article key={orderGroup.order.id} className="overflow-hidden rounded-xl border border-line bg-white">
+                {dateGroup.orders.map((orderGroup) => {
+                  const retAmt = Number(orderGroup.order.returnedAmount ?? 0);
+                  const origAmt = Number(orderGroup.order.totalAmount);
+                  const isFullyRet = retAmt > 0 && retAmt >= origAmt;
+                  const isPartialRet = retAmt > 0 && retAmt < origAmt;
+                  return (
+                  <article key={orderGroup.order.id} className={`overflow-hidden rounded-xl border bg-white ${isFullyRet ? 'border-rose-100' : 'border-line'}`}>
                     <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -529,6 +532,12 @@ const Statement: React.FC = () => {
                           <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs text-brand-600">
                             {orderGroup.items.length} 项明细
                           </span>
+                          {isFullyRet && (
+                            <span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-600">已退货</span>
+                          )}
+                          {isPartialRet && (
+                            <span className="rounded-full bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-600">部分退货</span>
+                          )}
                         </div>
                         {orderGroup.order.remark && (
                           <p className="mt-1.5 text-xs text-ink-tertiary">备注：{orderGroup.order.remark}</p>
@@ -536,7 +545,19 @@ const Statement: React.FC = () => {
                       </div>
                       <div className="text-right">
                         <div className="text-xs text-ink-tertiary">本单金额</div>
-                        <div className="text-sm font-semibold tabular-nums text-ink">¥{formatAmountDetail(orderGroup.totalAmount)}</div>
+                        {isFullyRet ? (
+                          <>
+                            <div className="text-sm font-semibold tabular-nums text-rose-500">¥0</div>
+                            <div className="text-xs text-ink-tertiary line-through">原¥{formatAmountDetail(origAmt)}</div>
+                          </>
+                        ) : isPartialRet ? (
+                          <>
+                            <div className="text-sm font-semibold tabular-nums text-ink">¥{formatAmountDetail(origAmt - retAmt)}</div>
+                            <div className="text-xs text-rose-400">已退¥{formatAmountDetail(retAmt)}</div>
+                          </>
+                        ) : (
+                          <div className="text-sm font-semibold tabular-nums text-ink">¥{formatAmountDetail(orderGroup.totalAmount)}</div>
+                        )}
                       </div>
                     </div>
                     <div className="border-t border-line-soft">
@@ -544,10 +565,8 @@ const Statement: React.FC = () => {
                         <table className="min-w-full">
                           <thead>
                             <tr className="border-b border-line bg-canvas text-ink-tertiary">
-                              <th className="px-4 py-2.5 text-left text-xs font-medium">产品名称</th>
-                              <th className="px-4 py-2.5 text-left text-xs font-medium">规格</th>
-                              <th className="px-4 py-2.5 text-right text-xs font-medium">数量</th>
-                              <th className="px-4 py-2.5 text-center text-xs font-medium">单位</th>
+                              <th className="px-4 py-2.5 text-left text-xs font-medium">产品/规格</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-medium">数量{unitLabel(orderGroup.items.map(i => i.product?.unit))}</th>
                               <th className="px-4 py-2.5 text-right text-xs font-medium">单价</th>
                               <th className="px-4 py-2.5 text-right text-xs font-medium">金额</th>
                             </tr>
@@ -555,12 +574,12 @@ const Statement: React.FC = () => {
                           <tbody className="divide-y divide-line-soft">
                             {orderGroup.items.map((item) => (
                               <tr key={item.id} className="transition-colors hover:bg-brand-50/40">
-                                <td className="px-4 py-2.5 text-sm text-ink">{item.product?.name || '-'}</td>
-                                <td className="px-4 py-2.5 text-sm text-ink-secondary">{item.product?.specification || '-'}</td>
+                                <td className="px-4 py-2.5 text-sm text-ink">
+                                  {[item.product?.name, item.product?.specification].filter(Boolean).join(' ') || '-'}
+                                </td>
                                 <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">
                                   {formatDisplayDecimal(item.quantity, 4)}
                                 </td>
-                                <td className="px-4 py-2.5 text-center text-sm text-ink-secondary">{item.product?.unit || '-'}</td>
                                 <td className="px-4 py-2.5 text-right text-sm tabular-nums text-ink">{formatUnitPrice(item.unitPrice)}</td>
                                 <td className="px-4 py-2.5 text-right text-sm font-medium tabular-nums text-ink">
                                   ¥{formatAmountDetail(item.amount)}
@@ -592,7 +611,8 @@ const Statement: React.FC = () => {
                       </div>
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -1090,8 +1110,7 @@ const Statement: React.FC = () => {
                         <tr>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">日期</th>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">品名</th>
-                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">数量</th>
-                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">单位</th>
+                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">数量{unitLabel(printableStatement.purchaseDates.flatMap(g => g.purchases).map(p => p.unit))}</th>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">单价</th>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">金额</th>
                         </tr>
@@ -1099,7 +1118,7 @@ const Statement: React.FC = () => {
                       <tbody>
                         {printableStatement.purchaseDates.length === 0 ? (
                           <tr>
-                            <td colSpan={6} className="border border-gray-900 px-3 py-4 text-center text-gray-500">
+                            <td colSpan={5} className="border border-gray-900 px-3 py-4 text-center text-gray-500">
                               本期无记录
                             </td>
                           </tr>
@@ -1116,7 +1135,6 @@ const Statement: React.FC = () => {
                                 <td className="border border-gray-900 px-2 py-2 text-right align-top">
                                   {formatDisplayDecimal(purchase.quantity, 4)}
                                 </td>
-                                <td className="border border-gray-900 px-2 py-2 text-center align-top">{printFieldValue(purchase.unit)}</td>
                                 <td className="border border-gray-900 px-2 py-2 text-right align-top">{formatUnitPrice(purchase.unitPrice)}</td>
                                 <td className="border border-gray-900 px-2 py-2 text-right align-top">
                                   ¥{formatAmountDetail(getPurchaseAmount(purchase))}
@@ -1133,10 +1151,8 @@ const Statement: React.FC = () => {
                         <tr>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">日期</th>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">单号</th>
-                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">产品名称</th>
-                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">规格</th>
-                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">数量</th>
-                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">单位</th>
+                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">产品/规格</th>
+                          <th className="border border-gray-900 px-2 py-2 text-center font-semibold">数量{unitLabel(printableStatement.deliveryDates.flatMap(g => g.orders).flatMap(o => o.items).map(i => i.product?.unit))}</th>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">单价</th>
                           <th className="border border-gray-900 px-2 py-2 text-center font-semibold">金额</th>
                         </tr>
@@ -1144,7 +1160,7 @@ const Statement: React.FC = () => {
                       <tbody>
                         {printableStatement.deliveryDates.length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="border border-gray-900 px-3 py-4 text-center text-gray-500">
+                            <td colSpan={6} className="border border-gray-900 px-3 py-4 text-center text-gray-500">
                               本期无记录
                             </td>
                           </tr>
@@ -1168,16 +1184,10 @@ const Statement: React.FC = () => {
                                       </td>
                                     )}
                                     <td className="border border-gray-900 px-2 py-2 align-top break-words">
-                                      {printFieldValue(item.product?.name)}
-                                    </td>
-                                    <td className="border border-gray-900 px-2 py-2 align-top">
-                                      {printFieldValue(item.product?.specification)}
+                                      {[item.product?.name, item.product?.specification].filter(Boolean).join(' ') || '-'}
                                     </td>
                                     <td className="border border-gray-900 px-2 py-2 text-right align-top">
                                       {formatDisplayDecimal(item.quantity, 4)}
-                                    </td>
-                                    <td className="border border-gray-900 px-2 py-2 text-center align-top">
-                                      {printFieldValue(item.product?.unit)}
                                     </td>
                                     <td className="border border-gray-900 px-2 py-2 text-right align-top">
                                       {formatUnitPrice(item.unitPrice)}

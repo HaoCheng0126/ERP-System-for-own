@@ -29,6 +29,15 @@ export const createReturnOrder = async (req: AuthRequest, res: Response, next: N
   }
 };
 
+export const updateReturnOrder = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const order = await returnService.update(req.params.id, req.user!.id, req.body);
+    res.json(order);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const deleteReturnOrder = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     await returnService.delete(req.params.id);
